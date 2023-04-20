@@ -5,7 +5,7 @@ mkdir temp
 args=$#
 
 if [ $args -eq 0 ]; then # if there are no arguments; -eq is equal to
-    echo -e "\tRunning Python collection scripts"
+    echo -e "\tRunning Python espn play by play collection scripts"
     for i in $(seq 2010 $(date +"%Y"))
     do
         let SECONDYEAR=${i}+1
@@ -16,7 +16,7 @@ if [ $args -eq 0 ]; then # if there are no arguments; -eq is equal to
   done
 
 elif [ $args -eq 1 ]; then # if there is one argument, just scrape that one year
-    echo -e "\tRunning Python collection scripts"
+    echo -e "\tRunning Python espn play by play collection scripts"
     let SECONDYEAR=$(($1 + 1))
     START_DATE=$1-08-01
     END_DATE=${SECONDYEAR}-02-01
@@ -24,7 +24,7 @@ elif [ $args -eq 1 ]; then # if there is one argument, just scrape that one year
     python3 run.py --start_date $START_DATE --end_date $END_DATE
 
 elif [ $args -eq 2 ]; then # if there are two arguments, scrape that range
-    echo -e "\tRunning Python collection scripts"
+    echo -e "\tRunning Python espn play by play collection scripts"
     for i in $(seq $1 $2)
     do
         let SECONDYEAR=$(($i + 1))

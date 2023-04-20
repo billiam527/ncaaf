@@ -1,0 +1,6 @@
+*/temp/
+*.csv*
+*__pycache__*
+/ncaaf_env
+.idea*
+*.txt*

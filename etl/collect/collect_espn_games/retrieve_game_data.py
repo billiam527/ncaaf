@@ -1,6 +1,5 @@
 import urllib.request
 import json
-import logging
 
 
 def retrieve_espn_game_data(url: str) -> dict:

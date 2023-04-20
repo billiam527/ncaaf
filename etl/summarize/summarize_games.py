@@ -40,14 +40,14 @@ def summarize_games(df: pd.DataFrame,
         .sum()[['home_team_id'] + statistics] \
         .rename({'home_team_id': 'team_id'}, axis=1)
 
-    # home offensive summaries
+    # away offensive summaries
     away_o = df.loc[(df['team_id'] == df['away_team_id']) & (df['offensive_play'] == 1)]
     away_o_game = away_o[away_o.groupby('game_id')['play_id'].transform('max') == away_o['play_id']] \
         .groupby(['id', 'date', 'season']) \
         .sum()[['away_team_id'] + statistics] \
         .rename({'away_team_id': 'team_id'}, axis=1)
 
-    # home defensive statistics
+    # away defensive statistics
     away_d = df.loc[(df['team_id'] == df['home_team_id']) & (df['offensive_play'] == 1)]
     away_d_game = away_d[away_d.groupby('game_id')['play_id'].transform('max') == away_d['play_id']] \
         .groupby(['id', 'date', 'season']) \
@@ -135,6 +135,7 @@ def rolling_game_summaries(gbg_df: pd.DataFrame,
     return gbg_reset.set_index(['season', 'team_id', 'date', 'id']) \
         .groupby(group_by)[moving_statistics] \
         .shift(1)
+
 
 def parse_args():
 

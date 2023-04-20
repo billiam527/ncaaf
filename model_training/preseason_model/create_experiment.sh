@@ -17,15 +17,30 @@ aws s3 cp s3://ncaaf-data/model_data/season_summaries.csv temp/season_summaries.
 printf "\n"
 read -p "start (inclusive) train season (YYYY): " start_year
 read -p "end (ex 2020 will train from start_year until 2019-2020 season) train season (YYYY): " end_year
-echo train_season_range: ${start_year} - ${end_year} >> temp/$file
+# shellcheck disable=SC2086
+echo train_season_range: "${start_year}" - ${end_year} >> temp/$file
+
+# test size or test year
+printf "\n"
+printf "select a test size (decimal) or select a year (int) to hold out as the test year \n"
+read -p "when selecting a year select beginning year of the season (ex 2021 will select the 2021-2022 season): " test
+if [[ $test =~ ^[+-]?[0-9]+$ ]]; then
+echo "Input is a year."
+echo test_year: "${test}" >> temp/"$file"
+fi
+
+if [[ $test =~ ^[+-]?[0-9]*\.[0-9]+$ ]]; then
+echo "Input is a decimal."
+echo test_size: "${test}" >> temp/"$file"
+fi
 
 # select features to train on
-printf "\nselect features to train on and FEATURES_SELECTED when done\n"
+printf "\nselect features to train on and select FEATURES_SELECTED when done\n"
 
 # take features from the header of season sums
 features=$(head -n 1 temp/season_summaries.csv)
 
-# cut after the second , (team_id, and season)
+# only take features after the second , (team_id, and season)
 cut_features=$(cut -d',' -f3- <<< "$features")
 for i in ${cut_features//,/ }
 do
@@ -56,23 +71,5 @@ do
     break
 done
 
-# test size
-printf "\n"
-read -p "test size (decimal): " test_size
-echo test_size: ${test_size} >> temp/$file
-
-# assign previous seasons and weights
-printf "\n"
-printf "how many seasons back should we train on and assign weights"
-printf '\n'
-read -p "seasons: " seasons_back
-#echo "assign weights to each of the prev seasons starting with the most recent season"
-#echo "make sure season weights are in decimal values and add up to 1.00"
-
-#for i in $(seq $seasons_back); do
-#    read -p "weight value: " weight
-#    weights="${weights},$weight"
-#done
-
-echo seasons_back: $seasons_back >> temp/$file
-#echo weights: ${weights} | sed s/,// >> temp/$file
+./preprocess.sh
+./train_model.sh

@@ -36,8 +36,12 @@ do
 done
 
 cd temp
+files=(*)
 tail -n +2 -q pbp_edit_*.csv >> pbp_edit.csv
+header=(head -n 1 "$files")
+sed -i $header pbp_edit.csv
+
 aws s3 cp . s3://ncaaf-data/espn-pbp-data/pbp/csvs/ --recursive --exclude "*" --include "pbp_edit*"
 cd ..
 
-rm -r temp
+#rm -r temp
