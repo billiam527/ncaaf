@@ -50,5 +50,3 @@ aws s3 cp . s3://ncaaf-data/espn-games-data/games/csvs/ --recursive --exclude "*
 aws s3 sync gamejsons s3://ncaaf-data/espn-games-data/games/jsons --quiet
 
 cd ..
-
-rm -r temp

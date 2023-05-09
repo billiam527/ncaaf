@@ -4,10 +4,12 @@ import glob
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from pickle import dump
+import argparse
 
 
 def read_data(games_df_file_loc: str,
               season_summary_df_file_loc: str,
+              # pbp_df_file_loc: str,
               experiment_info_txt_file_loc: str):
 
     with open(experiment_info_txt_file_loc) as f:
@@ -31,13 +33,16 @@ def read_data(games_df_file_loc: str,
             continue
         elif 'test_year' in line:
             test = int(data)
+        elif 'fbs_only_ind' in line:
+            fbs_only_ind = bool(data)
 
     return pd.read_csv(games_df_file_loc), \
         pd.read_csv(season_summary_df_file_loc), \
         start_year, \
         end_year, \
         features, \
-        test
+        test, \
+        fbs_only_ind
 
 
 def edit_files(games_df: pd.DataFrame,
@@ -73,7 +78,8 @@ def edit_files(games_df: pd.DataFrame,
     # season summaries column edits
     season_summaries = season_summary_df[['team_id', 'season'] + features]
 
-    years = list(range(start_year, end_year))
+    # +1 would get us to 2022, +2 will get us to the next year we want to predict
+    years = list(range(start_year, end_year+2))
     teams = []
     new_years = []
     for team in list(season_summaries['team_id'].unique()):
@@ -82,6 +88,7 @@ def edit_files(games_df: pd.DataFrame,
             new_years.append(int(year))
 
     teams_and_szns = pd.DataFrame(zip(teams, new_years), columns=['team_id', 'season'])
+    teams_and_szns.to_csv('temp/test.csv')
 
     season_summaries_add_years_edit = pd.merge(season_summaries, teams_and_szns, how='right',
                                                left_on=['team_id', 'season'],
@@ -204,19 +211,30 @@ def final_edits(train_df: pd.DataFrame,
         test_id_df
 
 
+#def parse_args():
+
+#    parser = argparse.ArgumentParser(description='Input path for season summary csv file')
+#    parser.add_argument('--season_summary_data')
+#    args = parser.parse_args()
+
+#    return args.season_summary_data
+
+
 if __name__ == '__main__':
 
     # All files ending with .txt
     experiment_info_txt_file_loc = glob.glob('temp/preseason_experiment*')[0]
+#    season_summary_data = parse_args()
 
     games_df, \
         season_summaries_df, \
         start_year, \
         end_year, \
         features, \
-        test = read_data(games_df_file_loc='temp/games.csv',
-                         season_summary_df_file_loc='temp/season_summaries.csv',
-                         experiment_info_txt_file_loc=experiment_info_txt_file_loc)
+        test,\
+        fbs_only_ind = read_data(games_df_file_loc='temp/games.csv',
+                                 season_summary_df_file_loc='temp/season_summaries.csv',
+                                 experiment_info_txt_file_loc=experiment_info_txt_file_loc)
 
     season_summaries_df.to_csv('temp/season_summaries_raw.csv')
 

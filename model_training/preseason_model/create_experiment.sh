@@ -4,7 +4,7 @@
 rm -r temp
 mkdir temp
 
-now=$(date +"%m_%d_%Y_%H_%m_%M_%S")
+now=$(date +"%Y_%m_%d_%H_%m_%M_%S")
 file="preseason_experiment_$now.txt"
 
 touch temp/$file
@@ -15,8 +15,9 @@ aws s3 cp s3://ncaaf-data/model_data/season_summaries.csv temp/season_summaries.
 
 # define train years
 printf "\n"
-read -p "start (inclusive) train season (YYYY): " start_year
-read -p "end (ex 2020 will train from start_year until 2019-2020 season) train season (YYYY): " end_year
+printf "Select years to train the model on\n"
+read -p "start (2022 will pull in the 2022-2023 season) train season (YYYY): " start_year
+read -p "end (2022 will pull in the 2022-2023 season) train season (YYYY): " end_year
 # shellcheck disable=SC2086
 echo train_season_range: "${start_year}" - ${end_year} >> temp/$file
 
@@ -60,6 +61,22 @@ do
 done
 echo data_features: ${selected_features} | sed s/,// >> temp/$file
 
+# FBS filter
+printf '\n'
+while true; do
+    read -p "Filter out non-FBS teams? (answer y/n) " yn
+    case $yn in
+        # join games to teams/fbs_ind and filter if yes
+        [Yy]* ) echo "FBS teams will be filtered out";
+          echo "fbs_only_ind: True" >> temp/$file;
+          break;;
+        [Nn]* ) echo "FBS teams will not be filtered out";
+          echo "fbs_only_ind: False" >> temp/$file;
+          break;;
+        * ) echo "Please answer yes or no.";;
+    esac
+done
+
 # algo
 printf '\n'
 echo choose training algorithm
@@ -70,6 +87,7 @@ do
     echo "training_algorithm: $algo" >> temp/$file
     break
 done
+printf '\n'
 
 ./preprocess.sh
 ./train_model.sh

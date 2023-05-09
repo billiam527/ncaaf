@@ -25,7 +25,10 @@ def transform_espn_ncaaf_team_data(json_data):
                 id.append(team['team']['id'])
                 slug.append(team['team']['slug'])
                 location.append(team['team']['location'])
-                name.append(team['team']['name'])
+                try:
+                    name.append(team['team']['name'])
+                except:
+                    name.append(team['team']['displayName'])
                 nickname.append(team['team']['nickname'])
                 abbreviation.append(team['team']['abbreviation'])
                 display_name.append(team['team']['displayName'])

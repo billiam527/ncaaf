@@ -68,6 +68,7 @@ def merge_games_and_stats(games_df: pd.DataFrame,
 
     games_df = games_df[['id', 'date', 'season', 'short_name', 'status',
                          'away_team_id', 'home_team_id']]
+
     away_df = pd.merge(games_df, stats_df, left_on=['away_team_id', 'season'], right_on=['team_id', 'season'])
     home_df = pd.merge(away_df, stats_df,
                        left_on=['home_team_id', 'season'],
@@ -122,4 +123,6 @@ if __name__ == '__main__':
                                               model=model,
                                               predict_file=final_file_to_predict)
     games_df['home_score_differential'] = predictions
+    games_df.drop(['team_id_away', 'team_id_home'], axis=1, inplace=True)
+    games_df.sort_values('date', inplace=True)
     games_df.to_csv(predict_dir + 'predictions.csv')

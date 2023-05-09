@@ -36,16 +36,9 @@ cd ..
 cd batch_prediction
 python -c "import predict; predict.echo_features('$model_file')"
 
-echo "Is file we are looking to predict here?"
-read -p "/home/bill/ncaaf/model_training/preseason_model/prediction_file/ (y/n) " answer
-if [[ $answer == y ]]; then
-  directory="/home/bill/ncaaf/model_training/preseason_model/prediction_file/"
-else
-  read -p "type in the name of the directory where the file with predictions is located " directory
-fi
-echo ""
-read -p "What is the name of the file we are looking to predict? (include any extensions like .csv) " file
+python scrape_scheduled_games.py
+directory="/home/bill/ncaaf/batch_prediction/prediction_file/"
+file="scheduled_games.csv"
 
-predict_dir="$directory"
-predict_file="$file"
-python predict.py --model_file $model_file --predict_dir $predict_dir --predict_file $predict_file
+python predict.py --model_file "$model_file" --predict_dir "$directory" --predict_file "$file"
+echo predictions sent to "$directory"predictions.csv

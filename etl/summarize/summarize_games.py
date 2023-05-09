@@ -144,17 +144,20 @@ def parse_args():
     parser.add_argument('--games_file_loc', default=default_games_file_path)
     default_pbp_file_path = 'temp/pbp_edit.csv'
     parser.add_argument('--pbp_file_loc', default=default_pbp_file_path)
+    default_output_file_path = 'temp/season_summaries.csv'
+    parser.add_argument('--output_file_loc', default=default_output_file_path)
     parser.add_argument('--summary_stats', nargs="+")
     args = parser.parse_args()
 
     return args.games_file_loc, \
         args.pbp_file_loc, \
+        args.output_file_loc, \
         args.summary_stats
 
 
 if __name__ == '__main__':
 
-    games_file_loc, pbp_file_loc, summary_stats = parse_args()
+    games_file_loc, pbp_file_loc, output_file_loc, summary_stats = parse_args()
 
     games_pbp_df = read_and_edit_files(pbp_file_loc=pbp_file_loc,
         games_file_loc=games_file_loc,
@@ -178,6 +181,6 @@ if __name__ == '__main__':
 
     rolling_summaries = rolling_game_summaries(gbg_df=game_by_game_summaries, stats=summary_stats)
 
-    season_df.to_csv('temp/season_summaries.csv')
+    season_df.to_csv(output_file_loc + 'season_summaries.csv')
     game_by_game_summaries.to_csv('temp/game_by_game_summaries.csv')
     rolling_summaries.to_csv('temp/rolling_summaries.csv')

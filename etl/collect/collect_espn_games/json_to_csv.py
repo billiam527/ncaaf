@@ -85,7 +85,7 @@ def transform_espn_ncaaf_game_data(json_data):
                 home_ot.append(home_ot_calc)
             except UnboundLocalError as e:
                 # print('Error:', e, 'cannot distinguish OT point')
-                home_ot.append(0)
+                home_ot.append(999)
             try:
                 away_1q = competition['competitors'][1]['linescores'][0]['value']
                 away_first_quarter.append(away_1q)
@@ -115,7 +115,7 @@ def transform_espn_ncaaf_game_data(json_data):
                 away_ot.append(away_ot_calc)
             except UnboundLocalError as e:
                 # print('Error:', e, 'cannot distinguish OT point')
-                away_ot.append(0)
+                away_ot.append(999)
 
         columns = list(zip(id,
                            date,

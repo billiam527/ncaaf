@@ -22,7 +22,12 @@ def main(url=url):
         with open('temp/' + file_name + '.json', 'w') as file:
             json.dump(json_data, file)
     team_data = transform_espn_ncaaf_team_data(json_data)
-    team_data.set_index('id', inplace=True)
+    #team_data.set_index('id', inplace=True)
+
+    # pull in fbs teams and join to the rest of the teams
+    fbs_df = pd.read_csv('fbs_teams.csv', index_col=0)
+    team_data = pd.merge(team_data, fbs_df, how='left').fillna(0)
+
     team_data.to_csv('temp/teams' + '.csv')
 
 
