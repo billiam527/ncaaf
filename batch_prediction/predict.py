@@ -7,6 +7,66 @@ import os
 import shutil
 
 
+def estimate_neutral_site_adjustment(history_loc='../analysis/backtest_expanding_preds.csv',
+                                     default=-3.0):
+    """Points to add to a neutral-site prediction.
+
+    Neither model has a neutral_site feature, so both apply their learned home
+    advantage to games where nobody is home. Measured on walk-forward history,
+    the residual on neutral games is about -2.9 points, and the home-field
+    advantage implied by the raw data (true-home mean minus neutral mean) is
+    +3.3 - two independent estimates of the same quantity.
+
+    Because the effect is an additive shift on a binary flag, correcting here is
+    equivalent to giving the models the feature, without retraining them and
+    regenerating the blend weights. It is shrunk toward the raw home-field
+    estimate because the residual sample is small (n=140).
+    """
+    try:
+        h = pd.read_csv(history_loc)
+        h = h[h['week_num'] < 90]
+        games = pd.read_csv('../etl/summarize/temp/games.csv', low_memory=False)
+        h = h.merge(games[['id', 'neutral_site']].drop_duplicates('id'),
+                    on='id', how='left')
+        neutral = h[h['neutral_site'] == 1]
+        neutral = neutral.dropna(subset=['in_season_model_preds',
+                                         'home_score_differential'])
+        if len(neutral) < 40:
+            return default
+        resid = (neutral['home_score_differential']
+                 - neutral['in_season_model_preds']).mean()
+        # shrink halfway toward the better-powered raw home-field estimate
+        return float(np.clip((resid + default) / 2.0, -6.0, 0.0))
+    except Exception as exc:
+        print(f"  could not estimate neutral-site adjustment ({exc}); "
+              f"using {default:+.1f}")
+        return default
+
+
+def apply_neutral_site_adjustment(preds_df, source_games, adjustment, columns):
+    """Remove the home-field component from neutral-site games."""
+    # The flag may already be present if the caller merged the scheduled games;
+    # merging it again would collide into neutral_site_x / neutral_site_y.
+    if 'neutral_site' not in preds_df.columns:
+        if 'neutral_site' not in source_games.columns:
+            print("  no neutral_site column available; skipping the adjustment")
+            return preds_df
+        flags = source_games[['id', 'neutral_site']].drop_duplicates('id')
+        preds_df = preds_df.merge(flags, on='id', how='left')
+
+    mask = preds_df['neutral_site'].fillna(0).astype(bool)
+
+    if mask.any():
+        for col in columns:
+            if col in preds_df.columns:
+                preds_df.loc[mask, col] = preds_df.loc[mask, col] + adjustment
+        print(f"  neutral-site adjustment {adjustment:+.2f} applied to "
+              f"{int(mask.sum())} game(s)")
+    else:
+        print("  no neutral-site games in this slate")
+    return preds_df
+
+
 def is_season_live(games_df: pd.DataFrame, season: int) -> bool:
     """True once `season` has at least one completed game.
 
@@ -381,9 +441,17 @@ if __name__ == '__main__':
         non_pred_games = pd.read_csv(predict_dir + predict_file, index_col=0)
         full_df = pd.merge(non_pred_games, preds_df, how='left', on='id',
                            suffixes=('', '_pred'))
-        cols = ['id', 'away_team_id', 'home_team_id', 'date', 'week', 'short_name', 
-                'preseason_model_preds', 'in_season_model_preds']
-        full_df = full_df[cols]
+
+        # Neither model can see whether a game is at a neutral site, so both
+        # apply their learned home advantage to games with no home team.
+        neutral_adj = estimate_neutral_site_adjustment()
+        full_df = apply_neutral_site_adjustment(
+            full_df, non_pred_games, neutral_adj,
+            columns=['preseason_model_preds', 'in_season_model_preds'])
+
+        cols = ['id', 'away_team_id', 'home_team_id', 'date', 'week', 'short_name',
+                'neutral_site', 'preseason_model_preds', 'in_season_model_preds']
+        full_df = full_df[[c for c in cols if c in full_df.columns]]
         full_df.to_csv(predict_dir + 'predictions.csv')
     else:
         # Build the historical per-week files that model_blender.py reads to fit
