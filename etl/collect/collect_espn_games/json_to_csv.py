@@ -1,183 +1,225 @@
 import pandas as pd
+import logging
 
+def safe_get(data, *keys, default=999):
+    """
+    Safely navigate nested dictionaries and lists.
+    
+    Args:
+        data: The data structure to navigate
+        *keys: Keys/indices to navigate through
+        default: Default value if navigation fails
+        
+    Returns:
+        The value at the specified path, or default if not found
+    """
+    try:
+        for key in keys:
+            if isinstance(data, (dict, list)) and key in data:
+                data = data[key]
+            elif isinstance(data, list) and isinstance(key, int) and 0 <= key < len(data):
+                data = data[key]
+            else:
+                return default
+        return data
+    except (KeyError, IndexError, TypeError):
+        return default
+
+def calculate_overtime_points(total_score, q1, q2, q3, q4):
+    """Calculate overtime points safely"""
+    try:
+        regulation_total = sum([q1, q2, q3, q4])
+        return max(0, int(total_score) - regulation_total)
+    except (ValueError, TypeError):
+        return 999
 
 def transform_espn_ncaaf_game_data(json_data):
-
     """
-    param json_data: (json) data pulled from espn's ncaaf api at the game level
+    Transform ESPN NCAAF game data from JSON to DataFrame.
 
-    return df: (pd.DataFrame) data in the relational table form
+    Args:
+        json_data (dict): Data pulled from ESPN's NCAAF API at the game level
+
+    Returns:
+        pd.DataFrame: Data in relational table form, or None if no valid data
     """
+    if json_data is None:
+        logging.warning("No JSON data provided")
+        return None
+        
+    if not isinstance(json_data, dict):
+        logging.error(f"Expected dict, got {type(json_data)}")
+        return None
+        
+    events = json_data.get('events', [])
+    if not events:
+        logging.info("No events found in JSON data")
+        return None
 
-    # game data
-    id = []
-    date = []
-    name = []
-    short_name = []
-    season = []
-    status = []
-    venue_id = []
-    neutral_site = []
+    # Initialize data containers
+    game_data = {
+        'id': [], 'date': [], 'name': [], 'short_name': [], 'season': [], 'status': [],
+        'venue_id': [], 'neutral_site': [], 'home_team_id': [], 'away_team_id': [],
+        'home_score': [], 'away_score': [],
+        'home_first_quarter': [], 'home_second_quarter': [], 'home_third_quarter': [], 
+        'home_fourth_quarter': [], 'home_ot': [],
+        'away_first_quarter': [], 'away_second_quarter': [], 'away_third_quarter': [], 
+        'away_fourth_quarter': [], 'away_ot': []
+    }
 
-    # team info
-    home_team_id = []
-    away_team_id = []
+    games_processed = 0
+    games_skipped = 0
 
-    # scoring
-    home_score = []
-    away_score = []
-    home_first_quarter = []
-    home_second_quarter = []
-    home_third_quarter = []
-    home_fourth_quarter = []
-    home_ot = []
-    away_first_quarter = []
-    away_second_quarter = []
-    away_third_quarter = []
-    away_fourth_quarter = []
-    away_ot = []
+    for game in events:
+        try:
+            # Skip games without required ID
+            game_id = safe_get(game, 'id', default=None)
+            if not game_id:
+                games_skipped += 1
+                continue
 
-    if json_data is not None:
-        for game in json_data['events']:
-            id.append(game['id'])
-            date.append(game['date'])
-            name.append(game['name'])
-            short_name.append(game['shortName'])
-            season.append(game['season']['year'])
-            status.append(game['status']['type']['name'])
-            competition = game['competitions'][0]
-            try:
-                venue_id.append(competition['venue']['id'])
-            except KeyError as e:
-                # print('Error:', e, 'venue_id', game['shortName'])
-                venue_id.append(999)
-            neutral_site.append(competition['neutralSite'])
-            home_team_id.append(competition['competitors'][0]['id'])
-            away_team_id.append(competition['competitors'][1]['id'])
-            home_score.append(competition['competitors'][0]['score'])
-            away_score.append(competition['competitors'][1]['score'])
-            try:
-                home_1q = competition['competitors'][0]['linescores'][0]['value']
-                home_first_quarter.append(home_1q)
-            except (KeyError, IndexError) as e:
-                # print('Error:', e, 'home_1q', game['shortName'])
-                home_first_quarter.append(999)
-            try:
-                home_2q = competition['competitors'][0]['linescores'][1]['value']
-                home_second_quarter.append(home_2q)
-            except (KeyError, IndexError) as e:
-                # print('Error:', e, 'home_2q', game['shortName'])
-                home_second_quarter.append(999)
-            try:
-                home_3q = competition['competitors'][0]['linescores'][2]['value']
-                home_third_quarter.append(home_3q)
-            except (KeyError, IndexError) as e:
-                # print('Error:', e, 'home_3q', game['shortName'])
-                home_third_quarter.append(999)
-            try:
-                home_4q = competition['competitors'][0]['linescores'][3]['value']
-                home_fourth_quarter.append(home_4q)
-            except (KeyError, IndexError) as e:
-                # print('Error:', e, 'home_4q', game['shortName'])
-                home_fourth_quarter.append(999)
-            try:
-                home_ot_calc = int(competition['competitors'][0]['score']) - (home_1q + home_2q + home_3q + home_4q)
-                home_ot.append(home_ot_calc)
-            except UnboundLocalError as e:
-                # print('Error:', e, 'cannot distinguish OT point')
-                home_ot.append(999)
-            try:
-                away_1q = competition['competitors'][1]['linescores'][0]['value']
-                away_first_quarter.append(away_1q)
-            except (KeyError, IndexError) as e:
-                # print('Error:', e, 'away_1q', game['shortName'])
-                away_first_quarter.append(999)
-            try:
-                away_2q = competition['competitors'][1]['linescores'][1]['value']
-                away_second_quarter.append(away_2q)
-            except (KeyError, IndexError) as e:
-                # print('Error:', e, 'away_2q', game['shortName'])
-                away_second_quarter.append(999)
-            try:
-                away_3q = competition['competitors'][1]['linescores'][2]['value']
-                away_third_quarter.append(away_3q)
-            except (KeyError, IndexError) as e:
-                # print('Error:', e, 'away_3q', game['shortName'])
-                away_third_quarter.append(999)
-            try:
-                away_4q = competition['competitors'][1]['linescores'][3]['value']
-                away_fourth_quarter.append(away_4q)
-            except (KeyError, IndexError) as e:
-                # print('Error:', e, 'away_4q', game['shortName'])
-                away_fourth_quarter.append(999)
-            try:
-                away_ot_calc = int(competition['competitors'][1]['score']) - (away_1q + away_2q + away_3q + away_4q)
-                away_ot.append(away_ot_calc)
-            except UnboundLocalError as e:
-                # print('Error:', e, 'cannot distinguish OT point')
-                away_ot.append(999)
+            # Basic game information
+            game_data['id'].append(game_id)
+            game_data['date'].append(safe_get(game, 'date', default=''))
+            game_data['name'].append(safe_get(game, 'name', default=''))
+            game_data['short_name'].append(safe_get(game, 'shortName', default=''))
+            game_data['season'].append(safe_get(game, 'season', 'year', default=0))
+            game_data['status'].append(safe_get(game, 'status', 'type', 'name', default=''))
 
-        columns = list(zip(id,
-                           date,
-                           name,
-                           short_name,
-                           season,
-                           status,
-                           venue_id,
-                           neutral_site,
-                           home_team_id,
-                           away_team_id,
-                           home_score,
-                           away_score,
-                           home_first_quarter,
-                           home_second_quarter,
-                           home_third_quarter,
-                           home_fourth_quarter,
-                           home_ot,
-                           away_first_quarter,
-                           away_second_quarter,
-                           away_third_quarter,
-                           away_fourth_quarter,
-                           away_ot))
+            # Competition data
+            competition = safe_get(game, 'competitions', 0, default={})
+            game_data['venue_id'].append(safe_get(competition, 'venue', 'id', default=999))
+            game_data['neutral_site'].append(safe_get(competition, 'neutralSite', default=False))
 
-        col_names = ['id',
-                     'date',
-                     'name',
-                     'short_name',
-                     'season',
-                     'status',
-                     'venue_id',
-                     'neutral_site',
-                     'home_team_id',
-                     'away_team_id',
-                     'home_score',
-                     'away_score',
-                     'home_first_quarter',
-                     'home_second_quarter',
-                     'home_third_quarter',
-                     'home_fourth_quarter',
-                     'home_ot',
-                     'away_first_quarter',
-                     'away_second_quarter',
-                     'away_third_quarter',
-                     'away_fourth_quarter',
-                     'away_ot']
+            # Team information
+            competitors = safe_get(competition, 'competitors', default=[])
+            if len(competitors) >= 2:
+                game_data['home_team_id'].append(safe_get(competitors, 0, 'id', default=''))
+                game_data['away_team_id'].append(safe_get(competitors, 1, 'id', default=''))
+                game_data['home_score'].append(safe_get(competitors, 0, 'score', default=0))
+                game_data['away_score'].append(safe_get(competitors, 1, 'score', default=0))
 
-        df = pd.DataFrame(columns, columns=col_names)
+                # Quarter scores for home team
+                home_linescores = safe_get(competitors, 0, 'linescores', default=[])
+                home_q1 = safe_get(home_linescores, 0, 'value', default=999)
+                home_q2 = safe_get(home_linescores, 1, 'value', default=999)
+                home_q3 = safe_get(home_linescores, 2, 'value', default=999)
+                home_q4 = safe_get(home_linescores, 3, 'value', default=999)
 
-        df[['home_score', 'away_score',
-            'home_first_quarter', 'home_second_quarter', 'home_third_quarter', 'home_fourth_quarter',
-            'home_ot',
-            'away_first_quarter', 'away_second_quarter', 'away_third_quarter', 'away_fourth_quarter',
-            'away_ot']] = \
-            df[['home_score', 'away_score',
-                'home_first_quarter', 'home_second_quarter', 'home_third_quarter', 'home_fourth_quarter',
-                'home_ot',
-                'away_first_quarter', 'away_second_quarter', 'away_third_quarter', 'away_fourth_quarter',
-                'away_ot']].astype('int32')
+                game_data['home_first_quarter'].append(home_q1)
+                game_data['home_second_quarter'].append(home_q2)
+                game_data['home_third_quarter'].append(home_q3)
+                game_data['home_fourth_quarter'].append(home_q4)
 
+                # Calculate home OT points
+                home_total = safe_get(competitors, 0, 'score', default=0)
+                home_ot = calculate_overtime_points(home_total, home_q1, home_q2, home_q3, home_q4)
+                game_data['home_ot'].append(home_ot)
+
+                # Quarter scores for away team
+                away_linescores = safe_get(competitors, 1, 'linescores', default=[])
+                away_q1 = safe_get(away_linescores, 0, 'value', default=999)
+                away_q2 = safe_get(away_linescores, 1, 'value', default=999)
+                away_q3 = safe_get(away_linescores, 2, 'value', default=999)
+                away_q4 = safe_get(away_linescores, 3, 'value', default=999)
+
+                game_data['away_first_quarter'].append(away_q1)
+                game_data['away_second_quarter'].append(away_q2)
+                game_data['away_third_quarter'].append(away_q3)
+                game_data['away_fourth_quarter'].append(away_q4)
+
+                # Calculate away OT points
+                away_total = safe_get(competitors, 1, 'score', default=0)
+                away_ot = calculate_overtime_points(away_total, away_q1, away_q2, away_q3, away_q4)
+                game_data['away_ot'].append(away_ot)
+
+            else:
+                # Handle missing competitor data
+                for key in ['home_team_id', 'away_team_id', 'home_score', 'away_score',
+                           'home_first_quarter', 'home_second_quarter', 'home_third_quarter',
+                           'home_fourth_quarter', 'home_ot', 'away_first_quarter',
+                           'away_second_quarter', 'away_third_quarter', 'away_fourth_quarter',
+                           'away_ot']:
+                    default_val = '' if 'team_id' in key else 999
+                    game_data[key].append(default_val)
+
+            games_processed += 1
+
+        except Exception as e:
+            logging.warning(f"Error processing game {safe_get(game, 'shortName', default='Unknown')}: {e}")
+            games_skipped += 1
+            continue
+
+    if games_processed == 0:
+        logging.warning("No games successfully processed")
+        return None
+
+    logging.info(f"Processed {games_processed} games, skipped {games_skipped}")
+
+    # Create DataFrame
+    try:
+        df = pd.DataFrame(game_data)
+
+        # Convert numeric columns
+        numeric_columns = [
+            'season', 'home_score', 'away_score', 'home_first_quarter', 'home_second_quarter',
+            'home_third_quarter', 'home_fourth_quarter', 'home_ot', 'away_first_quarter',
+            'away_second_quarter', 'away_third_quarter', 'away_fourth_quarter', 'away_ot'
+        ]
+
+        for col in numeric_columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(999).astype('int32')
+
+        # Convert boolean columns
+        df['neutral_site'] = df['neutral_site'].astype(bool)
+
+        logging.info(f"Successfully created DataFrame with {len(df)} rows and {len(df.columns)} columns")
         return df
 
+    except Exception as e:
+        logging.error(f"Error creating DataFrame: {e}")
+        return None
 
 if __name__ == '__main__':
-    None
+    # Example usage
+    sample_data = {
+        'events': [
+            {
+                'id': '401520282',
+                'date': '2023-09-02T17:00Z',
+                'name': 'Example vs Test',
+                'shortName': 'EX vs TST',
+                'season': {'year': 2023},
+                'status': {'type': {'name': 'Final'}},
+                'competitions': [
+                    {
+                        'venue': {'id': '3794'},
+                        'neutralSite': False,
+                        'competitors': [
+                            {
+                                'id': '52',
+                                'score': '31',
+                                'linescores': [
+                                    {'value': 7}, {'value': 14}, {'value': 3}, {'value': 7}
+                                ]
+                            },
+                            {
+                                'id': '103',
+                                'score': '17',
+                                'linescores': [
+                                    {'value': 0}, {'value': 10}, {'value': 0}, {'value': 7}
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+    
+    df = transform_espn_ncaaf_game_data(sample_data)
+    if df is not None:
+        print(f"Sample transformation successful: {len(df)} games processed")
+        print(df.head())
+    else:
+        print("Sample transformation failed")

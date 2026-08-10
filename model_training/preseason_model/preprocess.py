@@ -35,6 +35,8 @@ def read_data(games_df_file_loc: str,
             test = int(data)
         elif 'fbs_only_ind' in line:
             fbs_only_ind = bool(data)
+        elif 'training_algorithm' in line:
+            algo = data
 
     return pd.read_csv(games_df_file_loc), \
         pd.read_csv(season_summary_df_file_loc), \
@@ -42,7 +44,8 @@ def read_data(games_df_file_loc: str,
         end_year, \
         features, \
         test, \
-        fbs_only_ind
+        fbs_only_ind, \
+        algo
 
 
 def edit_files(games_df: pd.DataFrame,
@@ -224,7 +227,7 @@ if __name__ == '__main__':
 
     # All files ending with .txt
     experiment_info_txt_file_loc = glob.glob('temp/preseason_experiment*')[0]
-#    season_summary_data = parse_args()
+    #season_summary_data = parse_args()
 
     games_df, \
         season_summaries_df, \
@@ -232,9 +235,10 @@ if __name__ == '__main__':
         end_year, \
         features, \
         test,\
-        fbs_only_ind = read_data(games_df_file_loc='temp/games.csv',
-                                 season_summary_df_file_loc='temp/season_summaries.csv',
-                                 experiment_info_txt_file_loc=experiment_info_txt_file_loc)
+        fbs_only_ind, \
+        algo = read_data(games_df_file_loc='temp/games.csv',
+            season_summary_df_file_loc='temp/season_summaries.csv',
+            experiment_info_txt_file_loc=experiment_info_txt_file_loc)
 
     season_summaries_df.to_csv('temp/season_summaries_raw.csv')
 

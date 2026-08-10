@@ -1,62 +1,78 @@
 from datetime import datetime
-import re
 import glob
 import os
+import logging
+from typing import List
 
-time = datetime.now().time()
-today = datetime.today()
-date = today.strftime('%Y-%m-%d')
+def create_urls(prefix: str, suffix: str, data: List[str]) -> List[str]:
+    """
+    Create a list of string URLs using a prefix, suffix, and data to loop through.
 
+    Args:
+        prefix (str): URL prefix string
+        suffix (str): URL suffix string
+        data (List[str]): List of strings to be inserted between prefix and suffix
+
+    Returns:
+        List[str]: List of complete URL strings
+    """
+    if not isinstance(prefix, str):
+        raise TypeError('prefix must be a string')
+    if not isinstance(suffix, str):
+        raise TypeError('suffix must be a string')
+    if not isinstance(data, list):
+        raise TypeError('data must be a list')
+    
+    if not data:
+        raise ValueError('data list cannot be empty')
+    
+    for i, item in enumerate(data):
+        if not isinstance(item, str):
+            raise TypeError(f'data[{i}] must be a string, got {type(item)}')
+
+    return [f"{prefix}{item}{suffix}" for item in data]
 
 def main():
-
     """
-    Read the last file added to the datelist bucket and use the dates to create urls to scrape.
+    Read the most recent game IDs file and create URLs for play-by-play scraping.
     """
-
-    end_date = datetime.today()
-    start_date = '2019-08-01'
-    list_of_files = glob.glob('temp/game_ids*')
-    latest_file = max(list_of_files, key=os.path.getctime)
-    game_ids = [line.rstrip('\n') for line in open(latest_file)]
-    prefix = 'http://site.api.espn.com/apis/site/v2/sports/football/college-football/summary?event='
-    suffix = '&limit=900'
-    urls = create_urls(prefix, suffix, game_ids)
-    file_name = 'gameid_urls_'
-    if os.path.exists('temp'):
-        with open('temp/' + file_name + str(start_date) + '_to_' + end_date.strftime('%Y-%m-%d'), 'w') as file:
-            for item in urls:
-                file.write('%s\n' % item)
-    else:
-        os.mkdir('temp')
-        with open('temp/' + file_name + str(start_date) + '_to_' + end_date.strftime('%Y-%m-%d'), 'w') as file:
-            for item in urls:
-                file.write('%s\n' % item)
-
-
-def create_urls(prefix, suffix, data):
-
-    """
-    Create a list of string URLs using a prefix, suffix, and any data that needs
-    to be looped through.
-
-    param prefix: (str) string for URLs
-    param suffix: (str) string to come after looped data
-    param data: (list) list of string to be looped through and added to prefix
-        and suffix
-
-    return URLs: (list) list of URL strings
-    """
-
-    assert isinstance(prefix, str), 'prefix must be a string'
-    assert isinstance(suffix, str), 'suffix must be a string'
-    assert isinstance(data, list), 'data must be a list'
-    for string in data:
-        assert isinstance(string, str), 'each value in data must be a string'
-    urls = [prefix + j + suffix for j in data]
-
-    return urls
-
+    try:
+        # Find the most recent game_ids file
+        list_of_files = glob.glob('temp/game_ids*')
+        if not list_of_files:
+            raise FileNotFoundError("No game_ids files found in temp directory")
+            
+        latest_file = max(list_of_files, key=os.path.getctime)
+        logging.info(f"Using game IDs file: {latest_file}")
+        
+        # Read game IDs from file
+        with open(latest_file, 'r') as f:
+            game_ids = [line.strip() for line in f if line.strip()]
+        
+        if not game_ids:
+            raise ValueError("No valid game IDs found in file")
+        
+        # Create URLs
+        prefix = 'http://site.api.espn.com/apis/site/v2/sports/football/college-football/summary?event='
+        suffix = '&limit=900'
+        urls = create_urls(prefix, suffix, game_ids)
+        
+        # Save URLs to file
+        end_date = datetime.today()
+        start_date = '2019-08-01'  # This should ideally be extracted from the game_ids file
+        filename = f'temp/gameid_urls_{start_date}_to_{end_date.strftime("%Y-%m-%d")}_test'
+        
+        os.makedirs('temp', exist_ok=True)
+        with open(filename, 'w') as file:
+            for url in urls:
+                file.write(f'{url}\n')
+                
+        logging.info(f"Created {len(urls)} game ID URLs and saved to {filename}")
+        
+    except Exception as e:
+        logging.error(f"Error creating game ID URLs: {e}")
+        raise
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     main()

@@ -110,6 +110,7 @@ def transform_espn_ncaaf_game_data(json_data):
     # game data
     id = []
     date = []
+    week = []
     name = []
     short_name = []
     season = []
@@ -125,6 +126,7 @@ def transform_espn_ncaaf_game_data(json_data):
         for game in json_data['events']:
             id.append(game['id'])
             date.append(game['date'])
+            week.append(game['week']['number'])
             name.append(game['name'])
             short_name.append(game['shortName'])
             season.append(game['season']['year'])
@@ -141,6 +143,7 @@ def transform_espn_ncaaf_game_data(json_data):
 
         columns = list(zip(id,
                            date,
+                           week,
                            name,
                            short_name,
                            season,
@@ -152,6 +155,7 @@ def transform_espn_ncaaf_game_data(json_data):
 
         col_names = ['id',
                      'date',
+                     'week',
                      'name',
                      'short_name',
                      'season',
@@ -177,9 +181,12 @@ if __name__ == '__main__':
     date_urls = create_urls(date_prefix, date_suffix, dates)
 
     dfs = []
-    for url in date_urls:
+    for date, url in zip(dates, date_urls):
         json_data = retrieve_espn_game_data(url)
         pd_data = transform_espn_ncaaf_game_data(json_data)
+        if pd_data.empty:
+            continue
+        pd_data['date'] = pd.to_datetime(date, format='%Y%m%d')
         dfs.append(pd_data)
 
     df = pd.concat(dfs)
@@ -188,4 +195,4 @@ if __name__ == '__main__':
     df = df[df['short_name'].str.contains('TBD') == False]
     df.sort_values('date', inplace=True)
 
-    df.to_csv('/home/bill/ncaaf/batch_prediction/prediction_file/scheduled_games.csv')
+    df.to_csv('scheduled_games.csv')

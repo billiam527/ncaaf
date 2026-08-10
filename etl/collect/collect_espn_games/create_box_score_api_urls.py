@@ -1,25 +1,35 @@
-def create_urls(prefix, suffix, data):
+from typing import List
 
+def create_urls(prefix: str, suffix: str, data: List[str]) -> List[str]:
     """
-    Create a list of string URLs using a prefix, suffix, and any data that needs to be looped through.
+    Create a list of string URLs using a prefix, suffix, and data to loop through.
 
-    param prefix: (str) string for URLs
-    param suffix: (str) string to come after looped data
-    param data: (list) list of string to be looped through and added to prefix and suffix
+    Args:
+        prefix (str): URL prefix string
+        suffix (str): URL suffix string to come after looped data
+        data (List[str]): List of strings to be inserted between prefix and suffix
 
-    return URLs: (list) list of URL strings
+    Returns:
+        List[str]: List of complete URL strings
+
+    Raises:
+        TypeError: If inputs are not the correct type
+        ValueError: If any input is empty or invalid
     """
+    if not isinstance(prefix, str):
+        raise TypeError('prefix must be a string')
+    if not isinstance(suffix, str):
+        raise TypeError('suffix must be a string')
+    if not isinstance(data, list):
+        raise TypeError('data must be a list')
+    
+    if not data:
+        raise ValueError('data list cannot be empty')
+    
+    for i, item in enumerate(data):
+        if not isinstance(item, str):
+            raise TypeError(f'data[{i}] must be a string, got {type(item)}')
+        if not item.strip():
+            raise ValueError(f'data[{i}] cannot be empty or whitespace')
 
-    assert isinstance(prefix, str), 'prefix must be a string'
-    assert isinstance(suffix, str), 'suffix must be a string'
-    assert isinstance(data, list), 'data must be a list'
-    for string in data:
-        assert isinstance(string, str), 'each value in data must be a string'
-
-    urls = [prefix + j + suffix for j in data]
-
-    return urls
-
-
-if __name__ == '__main__':
-    None
+    return [f"{prefix}{item}{suffix}" for item in data]

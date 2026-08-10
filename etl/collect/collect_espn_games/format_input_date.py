@@ -1,34 +1,58 @@
 from datetime import datetime, timedelta
+from typing import List
 
-
-def date_list_generation(start_date: str,
-                         end_date: str) -> list:
+def date_list_generation(start_date: str, end_date: str) -> List[str]:
     """
-    Generate a list of dates.
+    Generate a list of dates in YYYYMMDD format.
 
-    param start_date: (string) starting date in yyyy-mm-dd format
-    param end_date: (string) ending date in yyyy-mm-dd format
+    Args:
+        start_date (str): Starting date in YYYY-MM-DD format
+        end_date (str): Ending date in YYYY-MM-DD format
 
-    return date_list: (list) inclusive list of strings between the start and end date
+    Returns:
+        List[str]: Inclusive list of date strings in YYYYMMDD format
+
+    Raises:
+        TypeError: If dates are not strings
+        ValueError: If date format is invalid or end_date is before start_date
     """
+    if not isinstance(start_date, str):
+        raise TypeError('start_date must be a string')
+    if not isinstance(end_date, str):
+        raise TypeError('end_date must be a string')
 
-    assert isinstance(start_date, str), 'start_date must be a string'
-    assert isinstance(end_date, str), 'end_date must be a string'
+    try:
+        start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+        end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+    except ValueError as e:
+        raise ValueError(f'Invalid date format. Expected YYYY-MM-DD: {e}')
 
-    start_date = datetime.strptime(start_date, '%Y-%m-%d')  # start date
-    end_date = datetime.strptime(end_date, '%Y-%m-%d')  # end date
+    if end_dt < start_dt:
+        raise ValueError('end_date cannot be before start_date')
 
-    delta = end_date - start_date  # as timedelta
-
+    delta = end_dt - start_dt
     date_list = []
-    for i in range(delta.days + 1):  # loop through range of timedelta + 1
-        day = datetime.strftime(start_date + timedelta(days=i), '%Y%m%d')
-        date_list.append(day)
-
-    date_list = [i.replace('-', '') for i in date_list]
+    
+    for i in range(delta.days + 1):
+        current_date = start_dt + timedelta(days=i)
+        formatted_date = current_date.strftime('%Y%m%d')
+        date_list.append(formatted_date)
 
     return date_list
 
 
-if __name__ == "__main__":
-    None
+if __name__ == '__main__':
+    # Test the functions
+    try:
+        # Test date generation
+        dates = date_list_generation('2024-01-01', '2024-01-03')
+        print(f"Generated dates: {dates}")
+        
+        # Test URL creation
+        prefix = "https://api.example.com/data/"
+        suffix = "/games"
+        urls = create_urls(prefix, suffix, dates)
+        print(f"Generated URLs: {urls[:2]}...")  # Show first 2
+        
+    except Exception as e:
+        print(f"Test failed: {e}")
