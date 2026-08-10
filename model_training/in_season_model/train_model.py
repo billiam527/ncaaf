@@ -88,7 +88,7 @@ def output_model_results(algo,
     shutil.copy2(experiment_info_txt_file_loc, directory)
     shutil.copy2('temp/scaler.pkl', directory)
     shutil.copy2('temp/train_X_scaled.csv', directory)
-    shutil.copy2('temp/season_summaries_add_years_edit.csv', directory)
+    #shutil.copy2('temp/season_summaries_add_years_edit.csv', directory)
     filename = 'model.pkl'
     pickle.dump(model, open(directory + '/' + filename, 'wb'))
 
@@ -131,7 +131,7 @@ def output_model_results(algo,
 
 if __name__ == '__main__':
 
-    experiment_info_txt_file_loc = glob.glob('temp/preseason_experiment*')[0]
+    experiment_info_txt_file_loc = glob.glob('temp/in_season_experiment*')[0]
 
     algo, \
         train_X, \

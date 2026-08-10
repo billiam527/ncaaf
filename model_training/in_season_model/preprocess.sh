@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
 set -e
 
-printf "preprocessing file"
-printf "\n"
-
 # Pull the inputs preprocess.py reads. season_summaries.csv is produced by the
 # ETL (etl/summarize) and published to model_data/ by etl.sh.
 aws s3 cp s3://ncaaf-data/espn-games-data/games/csvs/games.csv temp/games.csv
 aws s3 cp s3://ncaaf-data/model_data/season_summaries.csv temp/season_summaries.csv
 
-file=$(python -c "import glob; print(glob.glob('temp/preseason_experiment*')[0])")
+file=$(python -c "import glob; print(glob.glob('temp/in_season_experiment*')[0])")
 
 FBS_ind=""
 SUB='fbs_only_ind'
@@ -49,5 +46,4 @@ fi
 # already produces these summaries, and preprocess.py applies the FBS filter
 # through the games join above.
 
-printf "running python preprocess script"
 python preprocess.py

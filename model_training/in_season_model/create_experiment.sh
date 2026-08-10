@@ -4,7 +4,7 @@
 ##   --search  re-derive the estimator hyperparameters with a nested search
 ##             (~10 min). Without it the last known-good params are carried
 ##             forward, so a routine retrain never silently reverts to library
-##             defaults - which on this data cost about 1.3 MAE.
+##             defaults - which on this data cost about 1.1 MAE.
 SEARCH_PARAMS=false
 for arg in "$@"; do
     case $arg in
@@ -18,13 +18,14 @@ rm -rf temp
 mkdir temp
 
 now=$(date +"%Y_%m_%d_%H_%m_%M_%S")
-file="preseason_experiment_$now.txt"
+file="in_season_experiment_$now.txt"
 
 touch temp/$file
 echo $now >> temp/$file
 
 ## specify experiment specifics ##
 aws s3 cp s3://ncaaf-data/model_data/season_summaries.csv temp/season_summaries.csv
+#aws s3 cp s3://ncaaf-data/model_data/rolling_summaries.csv temp/rolling_summaries.csv
 
 # define train years
 printf "\n"
@@ -57,6 +58,7 @@ features=$(head -n 1 temp/season_summaries.csv)
 # only take features after the second , (team_id, and season)
 #### EDIT
 # added team name into the season summaries file
+# f8 -> data starts at the 8th column
 cut_features=$(cut -d',' -f4- <<< "$features")
 for i in ${cut_features//,/ }
 do
@@ -115,7 +117,7 @@ selected_features_clean=$(echo "${selected_features}" | sed 's/^,//')
 if [ "$SEARCH_PARAMS" = true ]; then
     printf "Searching for hyperparameters (nested walk-forward, a few minutes)...\n"
     PARAMS=$(python ../tune_hyperparams.py \
-        --model preseason \
+        --model in_season \
         --features "${selected_features_clean}" \
         --train-start "${start_year}" \
         --train-end "${end_year}")
@@ -145,6 +147,5 @@ fi
 printf '\n'
 
 chmod 755 preprocess.sh
-chmod 755 train_model.sh
 ./preprocess.sh
-./train_model.sh
+python train_model.py
