@@ -1,6 +1,31 @@
-*/temp/
+# Pipeline working directories.
+# `*/temp/` only matched one level down, so paths like
+# etl/collect/collect_espn_games/temp/ slipped through and 2,478 scraped JSON
+# files ended up tracked. `**/temp/` matches at any depth.
+**/temp/
+**/logs/
+**/backups/
+**/staging_for_s3/
+
+# Bulk scrape output
+**/gamejsons/
+**/pbpjsons/
+
+# Generated data and experiment records
 *.csv*
+*.txt*
+
+# Analysis and backtest outputs
+/analysis/
+
+# Windows alternate data streams, created when a file is downloaded via a browser
+*:Zone.Identifier
+
+# Python
 *__pycache__*
+*.pyc
+
+# Environments and editors
 /ncaaf_env
 .idea*
-*.txt*
+.spyproject/
