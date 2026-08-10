@@ -206,7 +206,6 @@ rolling_game_summaries gets a rolling median. So game 1 is game 1's stats, game 
 
 The season_summaries, game_by_game_summaries, and rolling_summaries are all saved to individual files.
 
-#### flask_app
 #### line_scraper
 #### model_training
 

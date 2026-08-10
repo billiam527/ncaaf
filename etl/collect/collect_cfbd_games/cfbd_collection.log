@@ -1,0 +1,40 @@
+2026-08-08 13:07:50,413 - INFO - Scraping CFBD betting lines from 2010 to 2026
+2026-08-08 13:07:50,413 - INFO - Include postseason: True
+2026-08-08 13:07:51,101 - INFO - Found 773 regular season games for 2010
+2026-08-08 13:07:52,370 - INFO - Found 35 postseason games for 2010
+2026-08-08 13:07:53,861 - INFO - Found 777 regular season games for 2011
+2026-08-08 13:07:55,138 - INFO - Found 35 postseason games for 2011
+2026-08-08 13:07:58,288 - INFO - Found 805 regular season games for 2012
+2026-08-08 13:07:59,559 - INFO - Found 35 postseason games for 2012
+2026-08-08 13:08:01,689 - INFO - Found 813 regular season games for 2013
+2026-08-08 13:08:02,944 - INFO - Found 35 postseason games for 2013
+2026-08-08 13:08:04,949 - INFO - Found 829 regular season games for 2014
+2026-08-08 13:08:06,204 - INFO - Found 39 postseason games for 2014
+2026-08-08 13:08:08,052 - INFO - Found 829 regular season games for 2015
+2026-08-08 13:08:09,288 - INFO - Found 41 postseason games for 2015
+2026-08-08 13:08:11,094 - INFO - Found 832 regular season games for 2016
+2026-08-08 13:08:12,315 - INFO - Found 41 postseason games for 2016
+2026-08-08 13:08:14,110 - INFO - Found 834 regular season games for 2017
+2026-08-08 13:08:15,858 - INFO - Found 40 postseason games for 2017
+2026-08-08 13:08:18,129 - INFO - Found 845 regular season games for 2018
+2026-08-08 13:08:19,376 - INFO - Found 39 postseason games for 2018
+2026-08-08 13:08:21,255 - INFO - Found 848 regular season games for 2019
+2026-08-08 13:08:22,499 - INFO - Found 40 postseason games for 2019
+2026-08-08 13:08:24,037 - INFO - Found 542 regular season games for 2020
+2026-08-08 13:08:25,325 - INFO - Found 26 postseason games for 2020
+2026-08-08 13:08:27,601 - INFO - Found 849 regular season games for 2021
+2026-08-08 13:08:30,919 - INFO - Found 38 postseason games for 2021
+2026-08-08 13:08:33,707 - INFO - Found 1417 regular season games for 2022
+2026-08-08 13:08:34,912 - INFO - Found 46 postseason games for 2022
+2026-08-08 13:08:37,407 - INFO - Found 1350 regular season games for 2023
+2026-08-08 13:08:38,650 - INFO - Found 66 postseason games for 2023
+2026-08-08 13:08:41,367 - INFO - Found 1523 regular season games for 2024
+2026-08-08 13:08:42,593 - INFO - Found 50 postseason games for 2024
+2026-08-08 13:08:45,475 - INFO - Found 1547 regular season games for 2025
+2026-08-08 13:08:46,748 - INFO - Found 50 postseason games for 2025
+2026-08-08 13:08:48,247 - INFO - Found 888 regular season games for 2026
+2026-08-08 13:08:50,714 - INFO - Total records collected: 41873
+2026-08-08 13:08:50,716 - INFO - Unique games: 16957
+2026-08-08 13:08:50,720 - INFO - Betting providers: 12
+2026-08-08 13:08:51,091 - INFO - Data saved to cfbd_spread_data.csv
+2026-08-08 13:08:51,105 - INFO - CFBD collection completed successfully
