@@ -29,3 +29,6 @@
 /ncaaf_env
 .idea*
 .spyproject/
+
+# schedule scrape backups
+*.csv.bak-*

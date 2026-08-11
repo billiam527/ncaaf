@@ -94,9 +94,11 @@ def retrieve_espn_game_data(url: str) -> dict:
             return data
 
     except urllib.error.HTTPError as e:
-        pass
+        print('HTTP error', e.code, 'for', url)
     except urllib.error.URLError as e:
-        pass
+        print('URL error', e.reason, 'for', url)
+
+    return None
 
 
 def transform_espn_ncaaf_game_data(json_data):
@@ -122,6 +124,20 @@ def transform_espn_ncaaf_game_data(json_data):
     home_team_id = []
     away_team_id = []
 
+    col_names = ['id',
+                 'date',
+                 'week',
+                 'name',
+                 'short_name',
+                 'season',
+                 'status',
+                 'venue_id',
+                 'neutral_site',
+                 'home_team_id',
+                 'away_team_id']
+
+    # a failed request or a date with no games both yield an empty frame, so the
+    # caller never has to distinguish None from a DataFrame
     if json_data is not None:
         for game in json_data['events']:
             id.append(game['id'])
@@ -141,33 +157,21 @@ def transform_espn_ncaaf_game_data(json_data):
             home_team_id.append(competition['competitors'][0]['id'])
             away_team_id.append(competition['competitors'][1]['id'])
 
-        columns = list(zip(id,
-                           date,
-                           week,
-                           name,
-                           short_name,
-                           season,
-                           status,
-                           venue_id,
-                           neutral_site,
-                           home_team_id,
-                           away_team_id))
+    columns = list(zip(id,
+                       date,
+                       week,
+                       name,
+                       short_name,
+                       season,
+                       status,
+                       venue_id,
+                       neutral_site,
+                       home_team_id,
+                       away_team_id))
 
-        col_names = ['id',
-                     'date',
-                     'week',
-                     'name',
-                     'short_name',
-                     'season',
-                     'status',
-                     'venue_id',
-                     'neutral_site',
-                     'home_team_id',
-                     'away_team_id']
+    df = pd.DataFrame(columns, columns=col_names)
 
-        df = pd.DataFrame(columns, columns=col_names)
-
-        return df
+    return df
 
 
 if __name__ == '__main__':
@@ -181,13 +185,28 @@ if __name__ == '__main__':
     date_urls = create_urls(date_prefix, date_suffix, dates)
 
     dfs = []
+    failed = []
     for date, url in zip(dates, date_urls):
         json_data = retrieve_espn_game_data(url)
+        if json_data is None:
+            failed.append(date)
+            continue
         pd_data = transform_espn_ncaaf_game_data(json_data)
         if pd_data.empty:
             continue
         pd_data['date'] = pd.to_datetime(date, format='%Y%m%d')
         dfs.append(pd_data)
+
+    # a partial scrape produces a schedule that silently omits games, so refuse
+    # to write one rather than let it reach the prediction file
+    if failed:
+        print('Failed to retrieve', len(failed), 'of', len(dates), 'dates')
+        if len(failed) > len(dates) * 0.05:
+            raise RuntimeError('Too many dates failed to download: ' + ', '.join(failed))
+
+    if not dfs:
+        raise RuntimeError('No scheduled games retrieved for any of the ' +
+                           str(len(dates)) + ' dates searched')
 
     df = pd.concat(dfs)
     df = df.loc[df['status'] == 'STATUS_SCHEDULED']
