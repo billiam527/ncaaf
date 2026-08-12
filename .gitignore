@@ -32,3 +32,6 @@
 
 # schedule scrape backups
 *.csv.bak-*
+
+# collected CFBD player data
+etl/collect/collect_cfbd_players/temp/

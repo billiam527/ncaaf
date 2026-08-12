@@ -9,9 +9,28 @@ import pandas as pd
 from datetime import datetime
 import time
 import argparse
+import os
 import sys
 import logging
 from tqdm import tqdm
+
+# The key used to live in this file as a literal, which put it in the public
+# repository. Read it from the environment, or from a file kept out of git.
+KEY_FILE = os.path.expanduser('~/.cfbd_api_key')
+
+
+def load_cfbd_key():
+    """CFBD API key from $CFBD_API_KEY or ~/.cfbd_api_key. None if absent."""
+    key = os.environ.get('CFBD_API_KEY', '').strip()
+    if key:
+        return key
+    if os.path.exists(KEY_FILE):
+        with open(KEY_FILE) as fh:
+            key = fh.read().strip()
+        if key:
+            return key
+    return None
+
 
 # Setup clean logging
 def setup_logging():
@@ -298,11 +317,13 @@ def main():
         logging.warning("CFBD data may be limited before 2001")
     
     # Configuration
-    API_KEY = "BYASZNhBGbXh1uzoqM4fRbZjnPetC+M4/yKmCMSNXPeq18+uvw5zGFLh5QY5d4Ka"
-    
+    API_KEY = load_cfbd_key()
+
     # Validate API key
-    if not API_KEY or API_KEY == "YOUR_API_KEY_HERE":
-        print("ERROR: Please set your CFBD API key in the script!")
+    if not API_KEY:
+        print("ERROR: No CFBD API key found.")
+        print("   Set CFBD_API_KEY in the environment, or put the key in")
+        print(f"   {KEY_FILE}")
         print("   Get your key from: https://collegefootballdata.com/key")
         logging.error("CFBD API key not configured")
         sys.exit(1)
