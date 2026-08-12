@@ -3,8 +3,27 @@ set -e
 
 # Pull the inputs preprocess.py reads. season_summaries.csv is produced by the
 # ETL (etl/summarize) and published to model_data/ by etl.sh.
-aws s3 cp s3://ncaaf-data/espn-games-data/games/csvs/games.csv temp/games.csv
-aws s3 cp s3://ncaaf-data/model_data/season_summaries.csv temp/season_summaries.csv
+#
+# The local ETL output wins when it exists. S3 is where these get published, not
+# where they come from, and pulling the published copy meant a model could be
+# retrained against stats several ETL runs old without any sign of it.
+LOCAL_SUMMARIES=../../etl/summarize/results/season_summaries.csv
+LOCAL_GAMES=../../etl/summarize/temp/games.csv
+
+if [ -f "$LOCAL_GAMES" ]; then
+    cp "$LOCAL_GAMES" temp/games.csv
+    printf "   games from local ETL output\n"
+else
+    aws s3 cp s3://ncaaf-data/espn-games-data/games/csvs/games.csv temp/games.csv
+fi
+
+if [ -f "$LOCAL_SUMMARIES" ]; then
+    cp "$LOCAL_SUMMARIES" temp/season_summaries.csv
+    printf "   season summaries from local ETL output (%s rows)\n" \
+        "$(( $(wc -l < temp/season_summaries.csv) - 1 ))"
+else
+    aws s3 cp s3://ncaaf-data/model_data/season_summaries.csv temp/season_summaries.csv
+fi
 
 file=$(python -c "import glob; print(glob.glob('temp/in_season_experiment*')[0])")
 
@@ -20,7 +39,12 @@ done < "$file"
 #### containing a team that isn't in the FBS list
 if [[ "$FBS_ind" == "True" ]]; then
 
-  aws s3 cp s3://ncaaf-data/espn-teams-data/teams.csv temp/teams.csv
+  LOCAL_TEAMS=../../etl/collect/collect_espn_teams/temp/teams.csv
+  if [ -f "$LOCAL_TEAMS" ]; then
+    cp "$LOCAL_TEAMS" temp/teams.csv
+  else
+    aws s3 cp s3://ncaaf-data/espn-teams-data/teams.csv temp/teams.csv
+  fi
 
   python - <<'PY'
 import pandas as pd
