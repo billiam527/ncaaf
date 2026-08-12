@@ -356,46 +356,68 @@ def add_expected_points(df: pd.DataFrame, ep_lookup_path: str = None) -> pd.Data
         df['half_seconds_remaining'] = 0  # Default
         
         if 'period' in df.columns:
-            # Try different clock column combinations
+            # The clock arrives from ESPN in a column simply called 'clock',
+            # holding strings like "14:50". The two names checked before it
+            # ('clock_minutes'/'clock_seconds' and 'clock_display_value') do
+            # not exist in this data, so every run fell through to the period
+            # approximation below and half_seconds_remaining took one of two
+            # values, 1200 or 600. That column is a feature of the expected
+            # points lookup, so the EP model - and therefore every EPA-derived
+            # statistic - was being built without real time remaining.
+            def parse_clock_display(clock_str):
+                try:
+                    if pd.isna(clock_str) or clock_str == '':
+                        return np.nan
+                    parts = str(clock_str).strip().split(':')
+                    if len(parts) == 2:
+                        return int(parts[0]) * 60 + int(parts[1])
+                    if len(parts) == 3:            # occasionally h:mm:ss
+                        return int(parts[1]) * 60 + int(parts[2])
+                    return np.nan
+                except (ValueError, TypeError):
+                    return np.nan
+
+            clock_col = next((c for c in ('clock', 'clock_display_value',
+                                          'clock_text')
+                              if c in df.columns), None)
+
             if 'clock_minutes' in df.columns and 'clock_seconds' in df.columns:
                 # Calculate seconds remaining in current half
-                df['clock_total_seconds'] = (df['clock_minutes'].fillna(0) * 60 + 
+                df['clock_total_seconds'] = (df['clock_minutes'].fillna(0) * 60 +
                                             df['clock_seconds'].fillna(0))
-                
+
                 # For periods 1 and 3 (start of each half), add 15*60 = 900 seconds for the next quarter
                 df['half_seconds_remaining'] = np.where(
                     df['period'].isin([1, 3]),
                     df['clock_total_seconds'] + 900,  # Current quarter + next quarter
                     df['clock_total_seconds']  # Just current quarter for periods 2, 4
                 )
-            elif 'clock_display_value' in df.columns:
-                # Parse clock display like "14:32" or "2:45"
-                def parse_clock_display(clock_str):
-                    try:
-                        if pd.isna(clock_str) or clock_str == '':
-                            return 0
-                        parts = str(clock_str).split(':')
-                        if len(parts) == 2:
-                            minutes = int(parts[0])
-                            seconds = int(parts[1])
-                            return minutes * 60 + seconds
-                        return 0
-                    except:
-                        return 0
-                
-                df['clock_total_seconds'] = df['clock_display_value'].apply(parse_clock_display)
+            elif clock_col is not None:
+                parsed = df[clock_col].map(parse_clock_display)
+                # Overtime periods have no meaningful half clock; treat them as
+                # the end of regulation rather than letting them go negative.
+                df['clock_total_seconds'] = parsed.fillna(0)
                 df['half_seconds_remaining'] = np.where(
                     df['period'].isin([1, 3]),
                     df['clock_total_seconds'] + 900,
                     df['clock_total_seconds']
                 )
+                parsed_share = parsed.notna().mean()
+                print(f"   Parsed clock from '{clock_col}' on "
+                      f"{parsed_share:.1%} of plays")
+                if parsed_share < 0.5:
+                    logging.warning(
+                        f"clock column '{clock_col}' parsed on only "
+                        f"{parsed_share:.1%} of plays")
             else:
                 # Use period to estimate time (rough approximation)
+                logging.warning("no clock column found; half_seconds_remaining "
+                                "falls back to a two-value period estimate")
                 df['half_seconds_remaining'] = np.where(
                     df['period'].isin([1, 3]), 1200,  # Early in half
                     600  # Later in half
                 )
-                
+
         elif 'seconds_left_half' in df.columns:
             # Use existing column if available
             df['half_seconds_remaining'] = df['seconds_left_half'].fillna(1500)
@@ -868,15 +890,32 @@ def add_basic_win_prob(df: pd.DataFrame,
             df['away_win'] = 0.5
             df['tie'] = 0.0
             
-        # Garbage time indicator
+        # Garbage time indicator.
+        #
+        # This previously keyed off the win probabilities above, which are a
+        # logistic on score differential alone with no time component. After
+        # the tie-normalisation divides by 1.05, "win prob > 0.9" resolves to a
+        # lead of more than 28.4 points, so only period 3 and 4 plays in a
+        # 29-point game were ever caught and 5.7% of the file remained at
+        # second-half leads of 22 to 28.
+        #
+        # The thresholds below are the standard college-football ones, which
+        # loosen as the clock runs down: a 24-point lead is a live game in the
+        # first quarter and a finished one in the fourth.
         df['garbage_time_ind'] = 0
-        if 'period' in df.columns:
-            garbage_condition = (
-                (df['period'] > 2) & 
-                ((df.get('home_win', 0.5) > 0.9) | (df.get('away_win', 0.5) > 0.9))
-            )
+        if 'period' in df.columns and {'home_score', 'away_score'} <= set(df.columns):
+            lead = (df['home_score'].fillna(0) - df['away_score'].fillna(0)).abs()
+            period = pd.to_numeric(df['period'], errors='coerce')
+            thresholds = {1: 43, 2: 37, 3: 27, 4: 22}
+            garbage_condition = pd.Series(False, index=df.index)
+            for qtr, margin in thresholds.items():
+                garbage_condition |= (period == qtr) & (lead > margin)
+            # overtime is never garbage time
+            garbage_condition &= period <= 4
             df.loc[garbage_condition, 'garbage_time_ind'] = 1
-            
+            logging.info(f"garbage time flagged on "
+                         f"{garbage_condition.mean():.2%} of plays")
+
     except Exception as e:
         logging.warning(f"Win probability calculation failed: {e}")
         df['home_win'] = 0.5

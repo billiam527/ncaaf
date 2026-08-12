@@ -157,14 +157,24 @@ def main(input_file_path, games_file_path, output_file_path):
                 pbar.update(1)
             print("   SUCCESS: Completed")
         
-        # Default win probability values (simple placeholder)
-        print("Adding default probability values...")
-        df['home_win'] = 0.5
-        df['tie'] = 0.0  
-        df['away_win'] = 0.5
-        df['garbage_time_ind'] = 0
-        print("   SUCCESS: Default values added")
-        logging.info("Added default probability values")
+        # Win probability and the garbage-time flag.
+        #
+        # These were previously hard-coded to 0.5/0.5 and 0 as a placeholder,
+        # which silently discarded whatever add_basic_win_prob had worked out
+        # and left garbage_time_ind unusable for anything downstream. Only fill
+        # in defaults for columns the processing steps did not already produce.
+        print("Adding probability values...")
+        from edit_pbp_file import add_basic_win_prob
+        df = add_basic_win_prob(df)
+        for col, default in (('home_win', 0.5), ('away_win', 0.5),
+                             ('tie', 0.0), ('garbage_time_ind', 0)):
+            if col not in df.columns:
+                df[col] = default
+        flagged = int(pd.to_numeric(df['garbage_time_ind'],
+                                    errors='coerce').fillna(0).sum())
+        print(f"   SUCCESS: garbage time flagged on {flagged:,} of "
+              f"{len(df):,} plays ({flagged / max(len(df), 1):.2%})")
+        logging.info(f"garbage time flagged on {flagged} plays")
         
         # Prepare output
         print("Preparing output...")
