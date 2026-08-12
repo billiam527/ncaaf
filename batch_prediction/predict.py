@@ -238,6 +238,38 @@ def edit_files(season_summary_df: pd.DataFrame,
 
     return ss_edit
 
+RETURNING_FILE = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    '..', 'etl', 'summarize', 'results', 'returning_production.csv'))
+
+# Kept in step with model_training/preseason_model/preprocess.py. If the two
+# lists drift apart the scaler and the prediction matrix stop matching, which
+# surfaces as a width mismatch rather than anything informative.
+RETURNING_FEATURES = ['ret_QB_starter', 'ret_RB_starter', 'ret_WR_starter',
+                      'ret_TE_starter', 'ret_defense', 'ret_good', 'ret_bad']
+
+
+def add_returning_production(stats_df: pd.DataFrame,
+                             path: str = RETURNING_FILE) -> pd.DataFrame:
+    """Join returning production onto per-season stats, without lagging.
+
+    The lagged stats are shifted because a statistic describes the season it
+    was recorded in. Returning production is already aligned to the season being
+    predicted, so it merges straight onto (team_id, season).
+    """
+    if not os.path.exists(path):
+        print(f"  returning production not found at {path}; skipping")
+        return stats_df
+
+    ret = pd.read_csv(path, low_memory=False)
+    have = [c for c in RETURNING_FEATURES if c in ret.columns]
+    if not have:
+        return stats_df
+
+    ret = ret[['team_id', 'season'] + have].drop_duplicates(['team_id', 'season'])
+    return stats_df.merge(ret, on=['team_id', 'season'], how='left')
+
+
 # merge the games that we want to predict with the last three years of sum stats
 def merge_games_and_stats(games_df: pd.DataFrame,
                           stats_df: pd.DataFrame):
@@ -387,6 +419,7 @@ if __name__ == '__main__':
                                  features=preseason_features,
                                  start_year=(target_season - 1) - 3,
                                  end_year=target_season - 1)
+        ss_edit = add_returning_production(ss_edit)
 
         # preseason model
         final_file_to_predict, games_df = merge_games_and_stats(games_df, ss_edit)

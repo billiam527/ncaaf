@@ -144,6 +144,10 @@ def walk_forward_season(season, pre_dir, ins_dir, fbs_only=True, verbose=True):
     ss = pd.read_csv(f'{RESULTS}/season_summaries.csv')
     ss_edit = P.edit_files(season_summary_df=ss, features=pre_feats,
                            start_year=(season - 1) - 3, end_year=season - 1)
+    # The preseason model is trained through preprocess.py, which joins
+    # returning production on top of the lagged stats. This has to do the same
+    # or the prediction matrix comes out narrower than the scaler expects.
+    ss_edit = P.add_returning_production(ss_edit)
     pre_matrix, pre_meta = P.merge_games_and_stats(games, ss_edit)
     pre_meta = pre_meta.copy()
     pre_meta['preseason_model_preds'] = pre_model.predict(pre_scaler.transform(pre_matrix))

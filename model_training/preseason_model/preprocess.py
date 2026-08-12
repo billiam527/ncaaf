@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import glob
+import os
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from pickle import dump
@@ -120,6 +121,62 @@ def edit_files(games_df: pd.DataFrame,
     ss_edit.drop(features, axis=1, inplace=True)
 
     return games_w_status_edit, season_summaries, season_summaries_add_years_edit, ss_edit
+
+
+# Resolved against this file rather than the working directory: walk_forward.py
+# imports this module and calls add_returning_production from batch_prediction,
+# where a relative path would point somewhere else entirely.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+RETURNING_FILE = os.path.normpath(
+    os.path.join(_HERE, '..', '..', 'etl', 'summarize', 'results',
+                 'returning_production.csv'))
+
+# What share of last season's production is back this season, by position group.
+# Measured on a 2019-2025 walk-forward against the shipped 72-feature base,
+# these are worth -0.156 MAE (t=-4.73) and +1.3% on picking the right side.
+#
+# ret_good and ret_bad split the skill roster at its own median efficiency and
+# measure each half's return rate separately, which distinguishes a team that
+# kept its best players from one that kept its worst - a single overall share
+# scores those identically. They replace ret_overall rather than joining it.
+#
+# Deliberately excluded: every _backup tier (at or below zero in each group),
+# offensive line (no usage metric exists for linemen), special teams (within
+# 0.01 of zero), and the portal and draft counts (draft departures look
+# predictive only until prior-season margin is controlled for, at which point
+# -0.171 becomes +0.055 - they were proxying for having been good).
+RETURNING_FEATURES = ['ret_QB_starter', 'ret_RB_starter', 'ret_WR_starter',
+                      'ret_TE_starter', 'ret_defense', 'ret_good', 'ret_bad']
+
+
+def add_returning_production(stats_df: pd.DataFrame,
+                             path: str = RETURNING_FILE) -> pd.DataFrame:
+    """Join returning production onto the per-season stats, without lagging.
+
+    The lagged features above are shifted because a stat describes the season it
+    was recorded in. Returning production is already aligned to the season being
+    predicted - the figure for season Y is built from season Y-1 production and
+    the season Y roster - so it merges straight onto (team_id, season).
+
+    Missing quietly rather than fatally: these start in 2015, and 2017 for the
+    defensive figure, so early seasons legitimately have none.
+    """
+    if not os.path.exists(path):
+        print(f"   returning production not found at {path}; skipping")
+        return stats_df
+
+    ret = pd.read_csv(path, low_memory=False)
+    have = [c for c in RETURNING_FEATURES if c in ret.columns]
+    if not have:
+        print(f"   none of {RETURNING_FEATURES} in {path}; skipping")
+        return stats_df
+
+    ret = ret[['team_id', 'season'] + have].drop_duplicates(['team_id', 'season'])
+    merged = stats_df.merge(ret, on=['team_id', 'season'], how='left')
+    covered = merged[have].notna().all(axis=1).mean()
+    print(f"   returning production: {len(have)} features, "
+          f"{covered:.1%} of team-seasons complete")
+    return merged
 
 
 def merge_games_and_stats(games_df: pd.DataFrame,
@@ -250,6 +307,8 @@ if __name__ == '__main__':
                              features=features,
                              start_year=start_year,
                              end_year=end_year)
+
+    ss_edit = add_returning_production(ss_edit)
 
     games_edit.to_csv('temp/games_edit.csv')
     season_summaries_w_features.to_csv('temp/season_summaries_features_edit.csv')

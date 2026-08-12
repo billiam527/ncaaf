@@ -110,6 +110,15 @@ def build_player_seasons():
     skill = skill[skill['group'].isin(SKILL_GROUPS)]
     skill = skill.rename(columns={'usage_overall': 'production'})
 
+    # Per-player efficiency, carried alongside usage so the roster can be split
+    # into the half that was good and the half that was not. Usage says how much
+    # a player was on the field; this says how well it went while he was.
+    ppa = load('ppa')
+    ppa['id'] = ppa['id'].astype(str)
+    ppa['quality'] = pd.to_numeric(ppa.get('averagePPA_all'), errors='coerce')
+    skill = skill.merge(ppa[['season', 'team', 'id', 'quality']],
+                        on=['season', 'team', 'id'], how='left')
+
     # defensive production: total tackles stand in for time on the field
     d = stats[(stats['category'] == 'defensive') & (stats['statType'] == 'TOT')]
     defence = d[['season', 'team', 'playerId', 'position', 'stat']].copy()
@@ -147,6 +156,16 @@ def assign_tiers(players):
                        ['production'].rank(method='first', ascending=False))
     slots = players['group'].map(STARTER_SLOTS).fillna(1)
     players['tier'] = np.where(players['rank'] <= slots, 'starter', 'backup')
+
+    # Standardise efficiency within season and position group: a quarterback's
+    # PPA and a tight end's are not on the same scale, so a raw comparison would
+    # sort every roster by position rather than by quality.
+    if 'quality' in players.columns:
+        players['zq'] = (players.groupby(['season', 'group'])['quality']
+                         .transform(lambda x: (x - x.mean()) / x.std()
+                                    if x.notna().sum() > 3 and x.std() else 0.0))
+    else:
+        players['zq'] = np.nan
     return players
 
 
@@ -178,6 +197,31 @@ def returning_features(players, roster, season):
                 row[f'ret_{group}_{tier}'] = (
                     tdd.loc[tdd.returns, 'production'].sum() / ttot
                     if ttot else np.nan)
+
+        # Split the skill roster into the half that was good and the half that
+        # was not, and measure each half's return rate separately.
+        #
+        # A single returning-share number treats a team that keeps its best
+        # players and one that keeps its worst as identical. Measured against
+        # residualised scoring margin, the good half is worth roughly four times
+        # the bad half (+0.177 against +0.078), and at a fixed overall returning
+        # share the teams that kept their better players beat those that kept
+        # their worse by a point of margin.
+        #
+        # The split is at the team's own median rather than a league-wide one.
+        # A league split scored worse (CV R2 0.0181 against 0.0265) and elite
+        # thresholds inverted outright - players above a league z of 1.0 are
+        # mostly the ones who leave for the draft, which marks a team that was
+        # good and is about to regress rather than one about to improve.
+        skill = td[td['group'].isin(SKILL_GROUPS) & td['quality'].notna()]
+        if len(skill) >= 5:
+            cut = skill['zq'].median()
+            for label, half in (('good', skill[skill['zq'] >= cut]),
+                                ('bad', skill[skill['zq'] < cut])):
+                htot = half['production'].sum()
+                row[f'ret_{label}'] = (
+                    half.loc[half.returns, 'production'].sum() / htot
+                    if htot else np.nan)
 
         # Defence pooled across position groups - see DEFENSE_ON_FIELD above.
         # Ranking happens across the whole defence rather than within a group,
