@@ -122,6 +122,39 @@ def flatten_ppa(records):
     return rows
 
 
+def collect_player_games(year, headers, pause=0.3):
+    """Per-game player PPA, which carries the opponent faced.
+
+    The season-level PPA endpoint gives one figure per player with no way to
+    tell a soft schedule from a hard one. This one names the opponent for every
+    game, which is what an opponent adjustment needs.
+
+    The endpoint requires a week when no team is given, so a season is pulled a
+    week at a time. Note there is no play-count field: a player who took three
+    snaps in a game appears the same as one who took sixty, so the adjustment
+    downstream has to lean on season usage to weight players instead.
+    """
+    frames = []
+    for season_type in ('regular', 'postseason'):
+        weeks = range(1, 17) if season_type == 'regular' else range(1, 6)
+        for week in weeks:
+            recs = fetch('/ppa/players/games', headers,
+                         {'year': year, 'week': week, 'seasonType': season_type})
+            if not recs:
+                continue
+            rows = []
+            for r in recs:
+                row = {k: v for k, v in r.items() if k != 'averagePPA'}
+                for k, v in (r.get('averagePPA') or {}).items():
+                    row[f'ppa_{k}'] = v
+                rows.append(row)
+            frames.append(pd.DataFrame(rows))
+            time.sleep(pause)
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
+
+
 def collect_year(year, headers):
     """Every per-year source for one season, as {name: DataFrame}."""
     out = {}
@@ -160,6 +193,11 @@ def main():
         os.path.dirname(os.path.abspath(__file__)), 'temp'))
     ap.add_argument('--pause', type=float, default=0.4,
                     help='seconds between requests')
+    ap.add_argument('--player-games', action='store_true',
+                    help='also pull per-game player PPA (about 20 requests per '
+                         'season; needed for the opponent adjustment)')
+    ap.add_argument('--only-player-games', action='store_true',
+                    help='pull only the per-game PPA, leaving other files alone')
     args = ap.parse_args()
 
     key = load_cfbd_key()
@@ -192,14 +230,21 @@ def main():
     collected = {}
     for year in range(args.start_year, args.end_year + 1):
         print(f"\n{year}")
-        try:
-            year_data = collect_year(year, headers)
-        except RuntimeError as exc:
-            print(f"  FAILED: {exc}")
-            raise
-        for name, frame in year_data.items():
-            print(f"  {name:<10} {len(frame):>7} rows")
-            collected.setdefault(name, []).append(frame)
+        if not args.only_player_games:
+            try:
+                year_data = collect_year(year, headers)
+            except RuntimeError as exc:
+                print(f"  FAILED: {exc}")
+                raise
+            for name, frame in year_data.items():
+                print(f"  {name:<10} {len(frame):>7} rows")
+                collected.setdefault(name, []).append(frame)
+        if args.player_games or args.only_player_games:
+            pg = collect_player_games(year, headers, args.pause)
+            print(f"  {'player_gm':<10} {len(pg):>7} rows"
+                  f"  ({pg['opponent'].nunique() if len(pg) else 0} opponents)")
+            if len(pg):
+                collected.setdefault('player_games', []).append(pg)
         time.sleep(args.pause)
 
     print()
