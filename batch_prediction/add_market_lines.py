@@ -86,6 +86,20 @@ def main():
     src = PREDICTIONS if os.path.exists(PREDICTIONS) else FALLBACK_PREDICTIONS
     if not os.path.exists(src):
         raise SystemExit(f"no predictions found. Run predict.sh first.\n  looked for {PREDICTIONS}")
+
+    # new_predictions.csv is written by implement_blended_model.py, which applies
+    # the blend weights to predictions.csv. Because it is preferred over
+    # predictions.csv rather than derived from it on the fly, a retrain that
+    # skips that step leaves this reading a file from the previous run and the
+    # market table comes out silently unchanged.
+    if (src == PREDICTIONS and os.path.exists(FALLBACK_PREDICTIONS)
+            and os.path.getmtime(FALLBACK_PREDICTIONS) > os.path.getmtime(PREDICTIONS)):
+        raise SystemExit(
+            f"{os.path.basename(PREDICTIONS)} is older than "
+            f"{os.path.basename(FALLBACK_PREDICTIONS)}, so the blend weights have "
+            f"not been applied to the current predictions.\n"
+            f"  run: python implement_blended_model.py")
+
     preds = pd.read_csv(src, index_col=0)
     print(f"predictions: {len(preds)} games from {os.path.basename(src)}")
 
