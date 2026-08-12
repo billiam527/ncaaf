@@ -39,8 +39,25 @@ baseline:
 | champ week (14) | 319 | −2.71 | 16.53 | 0.962 | [0.885, 1.033] | not distinguishable |
 | postseason (15-16) | 95 | −2.59 | 17.26 | 1.000 | [0.840, 1.151] | not distinguishable |
 
-The early-season effect is the only variance result in this directory with a CI
-that clears 1. It is both a bias (+1.52) and a spread (13.5% wider).
+Those numbers are measured on `in_season_model_preds`. **They do not survive into
+the published prediction**, which is the blend:
+
+| wk | n | preseason bias | in-season bias | blend bias |
+|---|---|---|---|---|
+| 2 | 139 | +4.80 | +7.56 | **−0.23** |
+| 3 | 415 | +0.17 | +2.28 | **−0.07** |
+| 4 | 495 | +0.45 | −0.06 | **−0.10** |
+| 5 | 510 | +0.42 | +0.38 | **−0.00** |
+
+Early-vs-mid on the blend: bias −0.07 against −0.02, sd ratio 1.029 with a CI of
+[0.984, 1.074]. Per-week blend weights are the mechanism that handles this, and
+they handle it — week 2 gets `pre_szn 1.461 / in_szn 0.572`, which amplifies
+exactly enough to offset the components' under-prediction. No early-season
+correction is warranted.
+
+The general lesson: measure on the column that actually gets published. Both the
+neutral-site sigma and the early-season regime looked real on a component model
+and vanished on the blend.
 
 Note the confounding between the neutral-site and postseason *mean* effects:
 most week 14-16 games are at neutral sites, so the −2.7 champ-week bias and the
@@ -70,6 +87,7 @@ This is the largest known error in the model.
 | `calibration_walkthrough.sh` | Raw prediction vs realised outcome, by band | Isotonic calibration improves MAE 14.42 → 14.00 and Brier 0.2061 → 0.2031 |
 | `calibration_centring.sh` | Centring the distribution on the prediction vs on zero | Centring on the prediction is required — the uncentred version returned a degenerate mode of +9 for a +35 prediction |
 | `ats_edge.sh` | Win rate against the closing spread | **No edge.** 50.6 / 50.5 / 49.9% across raw / linear / isotonic over 4,194 bets, against a 52.4% break-even. Closed |
+| `calibration_fit_column.sh` | Whether the calibrator is fitted on the column inference centres on | It was not. Fitted on `in_season_model_preds`, applied to `blended_prediction`. Worst probability band was off by **8.9%**; matching the columns brings it to 2.0%. Fixed in `margin_distribution.py` |
 
 ## Model internals
 

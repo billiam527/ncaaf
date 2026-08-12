@@ -51,6 +51,8 @@ _REPO = os.path.dirname(_HERE)
 GAMES = os.path.join(_REPO, 'etl', 'summarize', 'temp', 'games.csv')
 TEAMS = os.path.join(_REPO, 'etl', 'collect', 'collect_espn_teams', 'temp', 'teams.csv')
 HISTORY = os.path.join(_REPO, 'analysis', 'backtest_expanding_preds.csv')
+BLEND_WEIGHTS = os.path.join(_REPO, 'model_training', 'model_blender',
+                             'blended_model.csv')
 PREDICTIONS = os.path.join(_HERE, 'prediction_file', 'predictions_with_lines.csv')
 FALLBACK = os.path.join(_HERE, 'prediction_file', 'new_predictions.csv')
 OUT = os.path.join(_HERE, 'prediction_file', 'predictions_with_distribution.csv')
@@ -101,13 +103,58 @@ def key_number_weights(games, half_life=HALF_LIFE):
     return np.clip(np.where(smooth > 1e-9, emp / smooth, 1.0), 0.15, 4.0)
 
 
-def load_history():
+def add_blended(h):
+    """Reconstruct the blended prediction on historical games.
+
+    Inference centres the distribution on `blended_prediction`, so the
+    calibrator and sigma have to be fitted against the same quantity. The
+    walk-forward file stores only the two component models, so the per-week
+    blend is rebuilt here using the weights that predict.py applies.
+    """
+    if not os.path.exists(BLEND_WEIGHTS):
+        return h
+    w = pd.read_csv(BLEND_WEIGHTS)
+    if 'week' not in w.columns:
+        return h
+    w = w.copy()
+    w['wk'] = w['week'].astype(str).str.extract(r'(\d+)').astype(float)
+    w = w.dropna(subset=['wk']).set_index('wk')
+    for col in ('pre_szn_coefs', 'in_szn_coefs', 'intercepts'):
+        if col not in w.columns:
+            return h
+    wk = h['week_num'].astype(float)
+    h = h.copy()
+    h['blended'] = (wk.map(w['pre_szn_coefs']) * h['preseason_model_preds']
+                    + wk.map(w['in_szn_coefs']) * h['in_season_model_preds']
+                    + wk.map(w['intercepts']))
+    return h
+
+
+def load_history(fit_col='blended'):
     h = pd.read_csv(HISTORY)
-    return h[h.week_num < 90].dropna(
-        subset=['in_season_model_preds', 'home_score_differential'])
+    h = h[h.week_num < 90]
+    needed = ['home_score_differential', 'in_season_model_preds']
+    if fit_col == 'blended':
+        h = add_blended(h)
+        needed = ['home_score_differential', 'blended']
+    elif fit_col in h.columns:
+        needed = ['home_score_differential', fit_col]
+    return h.dropna(subset=[c for c in needed if c in h.columns])
 
 
-def fit_calibrator(half_life=HALF_LIFE):
+def resolve_fit_column(model_col):
+    """History column corresponding to the column inference centres on.
+
+    Fitting on one model and applying to another compresses everything toward
+    50/50: a calibrator fitted on the in-season model and applied to the blend
+    was off by up to 8.9 points in the 20-35% band, against 2.0 once matched.
+    """
+    if model_col in ('blended_prediction', 'blended_model'):
+        return 'blended'
+    return model_col
+
+
+def fit_calibrator(half_life=HALF_LIFE, fit_col='blended'):
     """Map raw prediction -> conditional mean outcome, monotonically.
 
     The model is over-confident conditionally: games predicted at -17 land
@@ -115,20 +162,26 @@ def fit_calibrator(half_life=HALF_LIFE):
     predictions corrects that without disturbing the ordering, and pulls the
     tails in - which is where P(home win) was worst calibrated.
     """
-    h = load_history()
+    h = load_history(fit_col)
+    if fit_col not in h.columns:
+        print(f"  '{fit_col}' could not be built from the walk-forward history; "
+              f"calibrating on in_season_model_preds instead")
+        fit_col = 'in_season_model_preds'
+        h = load_history(fit_col)
     w = season_weights(h['test_season'].to_numpy(float), half_life)
     iso = IsotonicRegression(out_of_bounds='clip').fit(
-        h['in_season_model_preds'], h['home_score_differential'], sample_weight=w)
+        h[fit_col], h['home_score_differential'], sample_weight=w)
     return iso
 
 
-def residual_sigma(half_life=HALF_LIFE, calibrator=None):
+def residual_sigma(half_life=HALF_LIFE, calibrator=None, fit_col='blended'):
     """Recency-weighted spread of outcomes around the (optionally calibrated)
     prediction. Calibrating shifts the centre, so sigma must be measured
     against the same quantity the distribution is centred on."""
-    h = load_history()
-    centre = (calibrator.predict(h['in_season_model_preds']) if calibrator is not None
-              else h['in_season_model_preds'].to_numpy(float))
+    h = load_history(fit_col)
+    col = fit_col if fit_col in h.columns else 'in_season_model_preds'
+    centre = (calibrator.predict(h[col]) if calibrator is not None
+              else h[col].to_numpy(float))
     r = h['home_score_differential'].to_numpy(float) - centre
     w = season_weights(h['test_season'].to_numpy(float), half_life)
     mean = np.average(r, weights=w)
@@ -156,10 +209,11 @@ def summarise(p, market_margin=np.nan):
     return out
 
 
-def validate(weights, sigma, calibrator=None):
+def validate(weights, sigma, calibrator=None, fit_col='blended'):
     """Are the probabilities honest? Compare predicted P(win) to realised."""
-    h = load_history()
-    raw = h['in_season_model_preds'].to_numpy(float)
+    h = load_history(fit_col)
+    col = fit_col if fit_col in h.columns else 'in_season_model_preds'
+    raw = h[col].to_numpy(float)
     actual = h['home_score_differential'].to_numpy(float)
     preds = calibrator.predict(raw) if calibrator is not None else raw
 
@@ -208,16 +262,27 @@ def main():
     hl = args.half_life if args.half_life and args.half_life > 0 else None
     games = fbs_games()
     weights = key_number_weights(games, hl)
-    calibrator = None if args.raw_centre else fit_calibrator(hl)
-    sigma = args.sigma or residual_sigma(hl, calibrator)
+
+    # Resolve the column inference will centre on before fitting anything, so
+    # the calibrator and sigma describe that same quantity.
+    src = PREDICTIONS if os.path.exists(PREDICTIONS) else FALLBACK
+    preds = pd.read_csv(src, index_col=0) if os.path.exists(src) else None
+    model_col = next((c for c in ('blended_prediction', 'blended_model',
+                                  'preseason_model_preds')
+                      if preds is not None and c in preds.columns), None)
+    fit_col = resolve_fit_column(model_col) if model_col else 'blended'
+
+    calibrator = None if args.raw_centre else fit_calibrator(hl, fit_col)
+    sigma = args.sigma or residual_sigma(hl, calibrator, fit_col)
     eff = season_weights(games['season'].to_numpy(float), hl).sum()
     print(f"sigma = {sigma:.2f} points; key-number weights from {len(games)} FBS games"
           f" ({eff:.0f} effective, half-life "
           f"{'off' if hl is None else f'{hl:g} seasons'}); "
-          f"centre = {'raw prediction' if calibrator is None else 'calibrated'}\n")
+          f"centre = {'raw prediction' if calibrator is None else 'calibrated'}"
+          f", fitted on {fit_col}\n")
 
     if args.validate:
-        validate(weights, sigma, calibrator)
+        validate(weights, sigma, calibrator, fit_col)
         print("\n=== effect of recency weighting on the key numbers ===")
         unw = key_number_weights(games, None)
         print(f"{'margin':>7}{'unweighted':>12}{'weighted':>11}{'change':>10}")
@@ -228,10 +293,10 @@ def main():
         print(f"\n  sigma unweighted {residual_sigma(None):.2f}  ->  weighted {sigma:.2f}")
         return
 
-    src = PREDICTIONS if os.path.exists(PREDICTIONS) else FALLBACK
-    preds = pd.read_csv(src, index_col=0)
-    model_col = next((c for c in ('blended_prediction', 'blended_model',
-                                  'preseason_model_preds') if c in preds.columns), None)
+    if preds is None:
+        raise SystemExit(f"no predictions file at {PREDICTIONS} or {FALLBACK}")
+    if model_col is None:
+        raise SystemExit(f"{os.path.basename(src)} has no usable prediction column")
     print(f"predictions: {len(preds)} games from {os.path.basename(src)} ({model_col})")
 
     rows = []
