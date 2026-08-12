@@ -66,6 +66,21 @@ STARTER_SLOTS = {'QB': 1, 'RB': 1, 'WR': 3, 'TE': 1, 'OL': 5,
 SKILL_GROUPS = ('QB', 'RB', 'WR', 'TE')
 DEFENSIVE_GROUPS = ('DL', 'LB', 'DB')
 
+# Defence is pooled rather than split. Measured against residualised scoring
+# margin on 1,203 team-seasons, one feature built from the top 11 defenders by
+# tackles beats the three position groups put together:
+#
+#   pooled top 11        1 feature   CV R2 +0.0288
+#   front7 + secondary   2 features        +0.0286
+#   DL + LB + DB         3 features        +0.0256
+#
+# Splitting hurts for two reasons. The position strings are applied
+# inconsistently between teams and years (DE, EDGE, DT, NT and DL all overlap),
+# and the halves move together anyway - front seven and secondary returning
+# rates correlate +0.340. Offence keeps its split because the roles there are
+# genuinely distinct and usage is published per player.
+DEFENSE_ON_FIELD = 11
+
 
 def load(name):
     path = os.path.join(PLAYER_DIR, f'cfbd_{name}.csv')
@@ -163,6 +178,21 @@ def returning_features(players, roster, season):
                 row[f'ret_{group}_{tier}'] = (
                     tdd.loc[tdd.returns, 'production'].sum() / ttot
                     if ttot else np.nan)
+
+        # Defence pooled across position groups - see DEFENSE_ON_FIELD above.
+        # Ranking happens across the whole defence rather than within a group,
+        # so the eleven who played most are the eleven counted, whatever the
+        # roster happens to call them.
+        dfn = td[td['group'].isin(DEFENSIVE_GROUPS)]
+        if not dfn.empty:
+            top = dfn.nlargest(DEFENSE_ON_FIELD, 'production')
+            dtot = top['production'].sum()
+            row['ret_defense'] = (top.loc[top.returns, 'production'].sum() / dtot
+                                  if dtot else np.nan)
+            row['n_defense_back'] = int(top['returns'].sum())
+            alltot = dfn['production'].sum()
+            row['ret_defense_all'] = (dfn.loc[dfn.returns, 'production'].sum() / alltot
+                                      if alltot else np.nan)
         rows.append(row)
     return pd.DataFrame(rows)
 
