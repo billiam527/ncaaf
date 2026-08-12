@@ -174,8 +174,19 @@ def add_returning_production(stats_df: pd.DataFrame,
     ret = ret[['team_id', 'season'] + have].drop_duplicates(['team_id', 'season'])
     merged = stats_df.merge(ret, on=['team_id', 'season'], how='left')
     covered = merged[have].notna().all(axis=1).mean()
+
+    # Fill rather than leave missing. merge_games_and_stats drops any row with a
+    # null, so joining these raw deletes every season before 2015 - and before
+    # 2017 for the defensive figure - outright. Filling with the column median
+    # leaves those rows carrying no returning signal rather than removing them.
+    for col in have:
+        if merged[col].notna().any():
+            merged[col] = merged[col].fillna(merged[col].median())
+        else:
+            merged[col] = 0.5
+
     print(f"   returning production: {len(have)} features, "
-          f"{covered:.1%} of team-seasons complete")
+          f"{covered:.1%} of team-seasons genuine (rest filled at the median)")
     return merged
 
 

@@ -267,7 +267,20 @@ def add_returning_production(stats_df: pd.DataFrame,
         return stats_df
 
     ret = ret[['team_id', 'season'] + have].drop_duplicates(['team_id', 'season'])
-    return stats_df.merge(ret, on=['team_id', 'season'], how='left')
+    merged = stats_df.merge(ret, on=['team_id', 'season'], how='left')
+
+    # Fill rather than leave missing. Returning production starts in 2015, and
+    # the defensive figure in 2017, but merge_games_and_stats drops any row with
+    # a null - so joining these raw deletes every earlier season outright. That
+    # cost the walk-forward its 2016 and 2017 retrains and a third of the games
+    # the blender fits on. Filling with each column's median leaves those rows
+    # carrying no returning signal, which is honest, instead of removing them.
+    for col in have:
+        if merged[col].notna().any():
+            merged[col] = merged[col].fillna(merged[col].median())
+        else:
+            merged[col] = 0.5
+    return merged
 
 
 # merge the games that we want to predict with the last three years of sum stats
