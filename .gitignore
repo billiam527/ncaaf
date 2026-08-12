@@ -35,3 +35,6 @@
 
 # collected CFBD player data
 etl/collect/collect_cfbd_players/temp/
+
+# comparison build from the garbage-time test
+etl/summarize/results_with_garbage/

@@ -215,12 +215,19 @@ while IFS= read -r YEAR; do
     
     echo "   Processing $YEAR with EPA..."
     
-    # Use the enhanced edit_pbp_file.py script with EP lookup path
+    # Use the enhanced edit_pbp_file.py script with EP lookup path.
+    #
+    # --include_garbage_time keeps garbage-time plays in the output with
+    # garbage_time_ind set, rather than deleting them here. Formatting should
+    # label plays and let summarize decide what to drop: with the rows removed
+    # at this stage, summarize's own --include_garbage_time flag had nothing to
+    # act on and the two settings could not be compared.
     if python3 edit_pbp_file.py \
         --input_file "$LOCAL_PBP" \
         --output_file "$OUTPUT_FILE" \
         --ep_lookup_path "$EP_LOOKUP_FILE" \
         --include_epa \
+        --include_garbage_time 1 \
         --include_win_prob 2>&1; then
         processed_files=$((processed_files + 1))
         echo "   Enhanced PBP data for $YEAR with EPA"

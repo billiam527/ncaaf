@@ -389,6 +389,11 @@ run_analysis() {
     analysis_cmd+=" --teams_file temp/teams.csv"
     analysis_cmd+=" --statistics $STATS"
     analysis_cmd+=" --output_dir results"
+    # Garbage-time plays are kept. Removing them was worth -0.087 MAE against
+    # keeping them (t=-4.14) on a 2019-2025 walk-forward - discarding 11% of
+    # plays makes the opponent-adjusted estimates noisier by more than the
+    # blowout snaps mislead.
+    analysis_cmd+=" --include_garbage_time"
     analysis_cmd+=" --alpha 1.0"
     
     echo "Running analysis pipeline..."
