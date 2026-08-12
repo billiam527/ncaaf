@@ -249,6 +249,36 @@ RETURNING_FEATURES = ['ret_QB_starter', 'ret_RB_starter', 'ret_WR_starter',
                       'ret_TE_starter', 'ret_defense', 'ret_good', 'ret_bad']
 
 
+TALENT_FILE = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    '..', 'etl', 'summarize', 'results', 'team_talent.csv'))
+
+# Recruiting talent, as a within-season percentile. The efficiency features say
+# how a team has played; this says what it has to play with, which is what the
+# market prices on mismatches and what the model was missing entirely. Worth
+# -0.243 MAE (t=-7.83) from two features, and it lifts correlation with market
+# lines from +0.712 to +0.757 - the only thing tested that moved that at all.
+#
+# Only the rolling class composite is used. CFBD's own 247 roster composite is
+# marginally better where it exists but stops at 2025, so it cannot price a
+# season that has not been played.
+TALENT_FEATURES = ['talent_roll_pct']
+
+
+def _add_talent(stats_df: pd.DataFrame, path: str = TALENT_FILE) -> pd.DataFrame:
+    if not os.path.exists(path):
+        return stats_df
+    tal = pd.read_csv(path, low_memory=False)
+    have = [c for c in TALENT_FEATURES if c in tal.columns]
+    if not have or 'team_id' not in tal.columns:
+        return stats_df
+    tal = tal.dropna(subset=['team_id'])
+    tal['team_id'] = pd.to_numeric(tal['team_id'], errors='coerce')
+    tal = tal.dropna(subset=['team_id'])
+    tal = tal[['team_id', 'season'] + have].drop_duplicates(['team_id', 'season'])
+    return stats_df.merge(tal, on=['team_id', 'season'], how='left')
+
+
 def add_returning_production(stats_df: pd.DataFrame,
                              path: str = RETURNING_FILE) -> pd.DataFrame:
     """Join returning production onto per-season stats, without lagging.
@@ -268,6 +298,8 @@ def add_returning_production(stats_df: pd.DataFrame,
 
     ret = ret[['team_id', 'season'] + have].drop_duplicates(['team_id', 'season'])
     merged = stats_df.merge(ret, on=['team_id', 'season'], how='left')
+    merged = _add_talent(merged)
+    have = have + [c for c in TALENT_FEATURES if c in merged.columns]
 
     # Fill rather than leave missing. Returning production starts in 2015, and
     # the defensive figure in 2017, but merge_games_and_stats drops any row with

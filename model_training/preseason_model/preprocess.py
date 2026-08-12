@@ -148,6 +148,11 @@ RETURNING_FILE = os.path.normpath(
 RETURNING_FEATURES = ['ret_QB_starter', 'ret_RB_starter', 'ret_WR_starter',
                       'ret_TE_starter', 'ret_defense', 'ret_good', 'ret_bad']
 
+TALENT_FILE = os.path.normpath(
+    os.path.join(_HERE, '..', '..', 'etl', 'summarize', 'results',
+                 'team_talent.csv'))
+TALENT_FEATURES = ['talent_roll_pct']
+
 
 def add_returning_production(stats_df: pd.DataFrame,
                              path: str = RETURNING_FILE) -> pd.DataFrame:
@@ -173,6 +178,25 @@ def add_returning_production(stats_df: pd.DataFrame,
 
     ret = ret[['team_id', 'season'] + have].drop_duplicates(['team_id', 'season'])
     merged = stats_df.merge(ret, on=['team_id', 'season'], how='left')
+
+    # Recruiting talent as a within-season percentile: what a team has to play
+    # with, as opposed to how it has played. Worth -0.243 MAE (t=-7.83) from a
+    # single feature per team, and the only thing that has moved correlation
+    # with market lines (+0.712 to +0.757). CFBD's own 247 roster composite is
+    # marginally stronger but stops at 2025, so the rolling class version is
+    # used instead - it exists for a season that has not been played.
+    if os.path.exists(TALENT_FILE):
+        tal = pd.read_csv(TALENT_FILE, low_memory=False)
+        tcols = [c for c in TALENT_FEATURES if c in tal.columns]
+        if tcols and 'team_id' in tal.columns:
+            tal = tal.dropna(subset=['team_id']).copy()
+            tal['team_id'] = pd.to_numeric(tal['team_id'], errors='coerce')
+            tal = tal.dropna(subset=['team_id'])
+            tal = tal[['team_id', 'season'] + tcols].drop_duplicates(
+                ['team_id', 'season'])
+            merged = merged.merge(tal, on=['team_id', 'season'], how='left')
+            have = have + tcols
+
     covered = merged[have].notna().all(axis=1).mean()
 
     # Fill rather than leave missing. merge_games_and_stats drops any row with a
