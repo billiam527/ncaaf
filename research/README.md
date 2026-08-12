@@ -20,9 +20,36 @@ Generated CSV outputs land in `analysis/`, which is gitignored.
 | `residual_signal.sh` | Whether league-average HFA is already absorbed by the model, plus rest and early-season residual structure | Average HFA is captured. Rest and early-season are not — see below |
 | `hfa_power_analysis.sh` | Smallest per-venue HFA effect the data could detect | Venue-level HFA is **not** distinguishable from noise. τ ≈ 0 by two estimators; split-half correlation −0.177 |
 | `hfa_by_conference.sh` | Same estimator pooled to conference level, where n is large enough to have power | True spread across conferences is only 0.45 points. Not worth modelling |
-| `neutral_site_effect.sh` | Margin behaviour at neutral sites | Mean is shifted (now corrected by `apply_neutral_site_adjustment`); the variance is also lower, sd 18.3 vs 21.2, and is **not** yet corrected |
+| `neutral_site_effect.sh` | Margin behaviour at neutral sites | Mean is shifted, and is corrected by `apply_neutral_site_adjustment` |
+| `neutral_site_variance.sh` | Whether neutral games also need their own sigma | **No.** The raw margin spread is narrower (18.80 vs 20.67) but that is the model correctly predicting closer games. The residual spread ratio is 0.909 with a 95% CI of [0.793, 1.022] on n=140 — not distinguishable from 1 |
+| `residual_variance_by_segment.sh` | Residual bias and spread by part of season | Early season is genuinely wider; champ week and postseason are not. See below |
 
-Conclusion: per-venue HFA is closed. Do not revisit without new data.
+Conclusion: per-venue HFA is closed, and so is a neutral-site sigma. Do not
+revisit either without new data.
+
+## Variance by part of season
+
+Measured on 6,245 walk-forward games, residual spread against the mid-season
+baseline:
+
+| segment | n | bias | resid sd | ratio vs mid | 95% CI | verdict |
+|---|---|---|---|---|---|---|
+| early (wks 2-5) | 1,559 | +1.52 | 19.49 | 1.135 | [1.088, 1.184] | **real** |
+| mid (wks 6-13) | 4,272 | −0.29 | 17.17 | — | — | baseline |
+| champ week (14) | 319 | −2.71 | 16.53 | 0.962 | [0.885, 1.033] | not distinguishable |
+| postseason (15-16) | 95 | −2.59 | 17.26 | 1.000 | [0.840, 1.151] | not distinguishable |
+
+The early-season effect is the only variance result in this directory with a CI
+that clears 1. It is both a bias (+1.52) and a spread (13.5% wider).
+
+Note the confounding between the neutral-site and postseason *mean* effects:
+most week 14-16 games are at neutral sites, so the −2.7 champ-week bias and the
+−2.6 postseason bias are largely the same games as the neutral-site correction
+already being applied. Do not apply both.
+
+Postseason games are present in the walk-forward — `week_num` runs 2 to 16 and
+the `week_num < 90` filter in `margin_distribution.load_history` drops nothing.
+There is no postseason blind spot.
 
 ## FBS vs FCS
 
