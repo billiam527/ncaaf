@@ -12,9 +12,13 @@ Output is per team-game so it can go through the same ridge opponent adjustment
 as every other statistic. That rules out splitting front seven from secondary,
 which needs player positions and those only exist in season-level stats.
 
-Rates are over defensive snaps, and tackles for loss are kept separate from
-sacks rather than summed, since a sack is already a tackle behind the line and
-adding them double counts the same event.
+Each rate is over the snaps it can actually happen on, not over all defensive
+snaps - sacks and breakups over pass plays, tackles for loss over rushing
+plays, stops over third and fourth downs. The denominators are written out
+alongside the rates because they vary widely game to game and anything that
+averages these rates has to weight by them. Tackles for loss are kept separate
+from sacks rather than summed, since a sack is already a tackle behind the line
+and adding them double counts the same event.
 
   tfl_rate        rushing plays stopped behind the line
   sack_rate       over pass plays faced
@@ -142,7 +146,10 @@ def main():
     out = pd.DataFrame({
         'game_id': d['game_id'], 'team_id': d['defense_id'],
         'season': d['season'],
-        'tfl_rate': d['tfl'] / d['plays'].replace(0, np.nan),
+        # tfl only fires on rushing plays, so it belongs over rushing plays -
+        # dividing by every snap mixes in dropbacks it could never occur on and
+        # makes pass-heavy schedules look like good run defences
+        'tfl_rate': d['tfl'] / d['rush_plays'].replace(0, np.nan),
         'sack_rate': d['sack'] / d['pass_plays'].replace(0, np.nan),
         'pass_defensed_rate': d['pbu'] / d['pass_plays'].replace(0, np.nan),
         'interception_rate': d['intc'] / d['pass_plays'].replace(0, np.nan),
@@ -151,6 +158,16 @@ def main():
         'fourth_down_stop_rate': d['fourth_stop'] / d['fourth'].replace(0, np.nan),
         'redzone_stop_rate': 1 - d['rz_td'] / d['rz_drives'].replace(0, np.nan),
         'def_plays': d['plays'],
+        # each rate has its own denominator, and they differ by a lot within a
+        # single game - a team can face 55 dropbacks or 20. Carry them through
+        # so the season roll-up and the opponent ridge can weight by the count
+        # the rate was actually measured over instead of treating a 20-dropback
+        # game as equal evidence to a 55-dropback one.
+        'pass_plays': d['pass_plays'],
+        'rush_plays': d['rush_plays'],
+        'third_downs': d['third'],
+        'fourth_downs': d['fourth'],
+        'rz_drives': d['rz_drives'],
     })
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
