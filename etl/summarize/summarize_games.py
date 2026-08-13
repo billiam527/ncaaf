@@ -33,6 +33,29 @@ def _is_rate_statistic(stat: str) -> bool:
     return 'rate' in name or 'success' in name or '_per_' in name
 
 
+# How each rate is rebuilt: (numerator column, denominator).
+# The denominator is either 'plays' (every play in the group), a play-type flag
+# to count, or an eligibility column to sum. These names collide with running
+# season-to-date columns of the same name in the play-by-play, which is exactly
+# why the rate must be recomputed rather than read.
+RATE_COMPONENTS = {
+    'yards_per_play':       ('stat_yardage', 'plays'),
+    'rush_yards_per_play':  ('stat_yardage', 'rushing_play'),
+    'pass_yards_per_play':  ('stat_yardage', 'passing_play'),
+    'play_success':         ('successful_play', 'plays'),
+    'rush_success':         ('rushing_successful_play', 'rushing_play'),
+    'pass_success':         ('passing_successful_play', 'passing_play'),
+    'explosive_play_rate':  ('explosive_play', 'explosive_play_eligible'),
+    'explosive_rush_rate':  ('rushing_explosive_play',
+                             'rushing_explosive_play_eligible'),
+    'explosive_pass_rate':  ('passing_explosive_play',
+                             'passing_explosive_play_eligible'),
+    'epa_per_play':         ('epa', 'plays'),
+    'epa_per_rush':         ('epa', 'rushing_play'),
+    'epa_per_pass':         ('epa', 'passing_play'),
+}
+
+
 @dataclass
 class AnalyticsConfig:
     """Configuration for football analytics pipeline"""
@@ -721,34 +744,86 @@ class GameStatsCalculator:
             return pd.DataFrame()
     
     def _add_requested_stats(self, result: dict, game_group: pd.DataFrame, statistics: List[str], side: str):
-        """Add requested statistics to result dictionary"""
-        
+        """Add requested statistics to result dictionary.
+
+        Every rate here is rebuilt from its own numerator and denominator. It
+        cannot be read off the column of the same name: the play-by-play
+        carries running season-to-date averages under exactly these names
+        (yards_per_play, play_success, epa_per_play and the rush/pass
+        variants), and averaging a running average weights the first play of a
+        game as heavily as the whole rest of it.
+
+        Old Dominion's 2025 passing offence is what surfaced this. Their true
+        figure is 8.1 yards per pass play, which is what their own site lists;
+        the mean of the running column made it 10.2 and put them 2nd in FBS.
+        Against a correct recomputation of the 2025 season the old values
+        correlated only 0.70 to 0.84, so roughly a third of the variance in
+        every core model feature was an artefact of this.
+        """
+
         suffix = '_def' if side == 'defense' else ''
         play_count = len(game_group)
-        
-        for stat in statistics:
-            if stat not in game_group.columns:
-                continue
-            
-            stat_data = game_group[stat].dropna()
-            if len(stat_data) == 0:
-                result[f'{stat}{suffix}'] = 0
-                continue
-            
-            # Determine aggregation. Match any "_per_" statistic, not just
-            # "per_play": epa_per_rush and epa_per_pass previously fell through
-            # to the sum branch, so a stat named "per rush" was really a game
-            # total that scaled with volume.
-            if _is_rate_statistic(stat):
-                stat_value = stat_data.mean()
-            else:
-                stat_value = stat_data.mean() if stat_data.max() <= 1.0 else stat_data.sum()
 
-            # Apply defense perspective for EPA
+        for stat in statistics:
+            value = self._compute_rate(game_group, stat, play_count)
+
+            if value is None:
+                # not a known rate - fall back to reading the column directly,
+                # which is still correct for anything that is not an average
+                if stat not in game_group.columns:
+                    continue
+                stat_data = game_group[stat].dropna()
+                if len(stat_data) == 0:
+                    result[f'{stat}{suffix}'] = 0
+                    continue
+                if _is_rate_statistic(stat):
+                    value = stat_data.mean()
+                else:
+                    value = (stat_data.mean() if stat_data.max() <= 1.0
+                             else stat_data.sum())
+
+            # Defensive EPA is stored as suppression: a defence that gives up
+            # negative EPA scores positively. Note this makes the EPA _def
+            # columns the opposite polarity to the success and yardage _def
+            # columns, which hold what was allowed.
             if 'epa' in stat.lower() and side == 'defense':
-                stat_value = -stat_value
-            
-            result[f'{stat}{suffix}'] = stat_value
+                value = -value
+
+            result[f'{stat}{suffix}'] = value
+
+    def _compute_rate(self, g: pd.DataFrame, stat: str, play_count: int):
+        """Rebuild one rate from its components, or None if `stat` is not one.
+
+        Returns 0.0 rather than None when the components exist but the
+        denominator is empty - a game with no rushing plays has a rush rate of
+        zero, not a missing one.
+        """
+        spec = RATE_COMPONENTS.get(stat)
+        if spec is None:
+            return None
+        num_col, den = spec
+        if num_col not in g.columns:
+            return None
+
+        if den == 'plays':
+            denom = play_count
+            num = pd.to_numeric(g[num_col], errors='coerce').sum()
+        elif den in ('rushing_play', 'passing_play'):
+            if den not in g.columns:
+                return None
+            mask = pd.to_numeric(g[den], errors='coerce') == 1
+            denom = int(mask.sum())
+            num = pd.to_numeric(g.loc[mask, num_col], errors='coerce').sum()
+        else:
+            # explosive rates are over the plays that could have been explosive
+            if den not in g.columns:
+                return None
+            denom = pd.to_numeric(g[den], errors='coerce').sum()
+            num = pd.to_numeric(g[num_col], errors='coerce').sum()
+
+        if not denom or denom <= 0:
+            return 0.0
+        return float(num) / float(denom)
     
     def _calculate_team_game_stats_vectorized(self, game_plays: pd.DataFrame, team_id: int, 
                                             opponent_id: int, side: str, statistics: List[str], 
