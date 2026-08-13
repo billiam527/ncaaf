@@ -18,8 +18,12 @@ much closer to play-calling identity.
 Defensive rates are what opponents chose to do against this team, which carries
 its own signal: opponents run at defences that cannot stop the run.
 
-Note garbage_time_ind exists in the play-by-play but is zero on every row, so it
-cannot be used to filter; the score and period conditions here stand in for it.
+Garbage time is kept, matching season_summaries and havoc. The note that used
+to sit here said garbage_time_ind was zero on every row and so unusable - that
+was true when this was written, before the flag was fixed in the play-by-play
+formatter, and is not true now. The neutral-situation rate is a stricter filter
+than the garbage-time flag anyway: it already excludes late blowout snaps along
+with every other non-neutral situation.
 
 Usage:
     python run_pass_ratio.py --out results/run_pass_ratio.csv

@@ -52,6 +52,13 @@ USECOLS = ['game_id', 'drive_id', 'team_id', 'offensive_play', 'rushing_play',
 CHUNK = 400_000
 REDZONE = 20
 
+# Garbage-time plays are kept, matching season_summaries. Dropping them was
+# worth -0.087 MAE against keeping them (t=-4.14) on a 2019-2025 walk-forward,
+# and having havoc on a different basis to every other statistic made its
+# numbers quietly incomparable - the published Old Dominion sack figures
+# excluded blowout snaps while their efficiency figures did not.
+KEEP_GARBAGE_TIME = True
+
 
 def accumulate(chunk, acc):
     c = chunk.copy()
@@ -59,7 +66,8 @@ def accumulate(chunk, acc):
                 'rushing_play', 'passing_play', 'offensive_yards', 'down',
                 'yards_to_goal', 'garbage_time_ind', 'scoring_play'):
         c[col] = pd.to_numeric(c[col], errors='coerce')
-    c = c[c['garbage_time_ind'] != 1]
+    if not KEEP_GARBAGE_TIME:
+        c = c[c['garbage_time_ind'] != 1]
     c = c.dropna(subset=['game_id', 'team_id'])
     off = c[c['offensive_play'] == 1].copy()
     if off.empty:

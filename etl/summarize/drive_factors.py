@@ -36,6 +36,10 @@ USECOLS = ['game_id', 'drive_id', 'team_id', 'yards_to_goal', 'offensive_play',
            'scoring_play', 'play_type_text', 'garbage_time_ind', 'down']
 CHUNK = 500_000
 
+# See the note in accumulate(). This is the one producer that drops garbage
+# time on purpose; season_summaries and havoc both keep it.
+KEEP_GARBAGE_TIME = False
+
 # Points credited to the offence, by the text ESPN uses on a scoring play.
 #
 # The vocabulary changes partway through the data. Through about 2011 a
@@ -83,10 +87,13 @@ def accumulate(chunk, acc):
             c[col] = pd.to_numeric(c[col], errors='coerce')
     c = c.dropna(subset=['drive_id', 'team_id', 'game_id'])
 
-    # Garbage time is excluded here even though it is kept for the efficiency
-    # stats: a drive that starts on the opponent's 30 because the game is over
-    # says nothing about field position earned.
-    if 'garbage_time_ind' in c.columns:
+    # Deliberately the opposite of season_summaries and havoc, both of which
+    # keep garbage time. Field position is the one measure where the blowout
+    # snaps are not merely noisier but actively misleading: a drive starting on
+    # the opponent's 30 because the game is over says nothing about field
+    # position earned, whereas a garbage-time sack is still a sack. Flip this
+    # only with a walk-forward behind it.
+    if not KEEP_GARBAGE_TIME and 'garbage_time_ind' in c.columns:
         c = c[c['garbage_time_ind'] != 1]
 
     off = c[c['offensive_play'] == 1]
