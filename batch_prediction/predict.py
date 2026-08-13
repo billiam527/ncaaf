@@ -264,19 +264,39 @@ TALENT_FILE = os.path.normpath(os.path.join(
 # season that has not been played.
 TALENT_FEATURES = ['talent_roll_pct']
 
+ROSTER_TALENT_FILE = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    '..', 'etl', 'summarize', 'results', 'roster_talent.csv'))
 
-def _add_talent(stats_df: pd.DataFrame, path: str = TALENT_FILE) -> pd.DataFrame:
+# Talent of the players on the roster, as opposed to the talent signed. These
+# do not replace the class-points measure - either one alone is worse than it -
+# but alongside it they are worth a further -0.059 MAE (t=-2.76) and take
+# correlation with market lines from +0.757 to +0.764. They measure different
+# things: class points carry the momentum of a strong recent haul, while these
+# reflect who is actually present after transfers and attrition.
+#
+# Position-group ratings were tested too and add nothing beyond these two.
+ROSTER_TALENT_FEATURES = ['blue_chip_ratio_pct', 'top22_rating_pct']
+
+
+def _merge_by_team_season(stats_df, path, wanted):
     if not os.path.exists(path):
         return stats_df
-    tal = pd.read_csv(path, low_memory=False)
-    have = [c for c in TALENT_FEATURES if c in tal.columns]
-    if not have or 'team_id' not in tal.columns:
+    src = pd.read_csv(path, low_memory=False)
+    have = [c for c in wanted if c in src.columns]
+    if not have or 'team_id' not in src.columns:
         return stats_df
-    tal = tal.dropna(subset=['team_id'])
-    tal['team_id'] = pd.to_numeric(tal['team_id'], errors='coerce')
-    tal = tal.dropna(subset=['team_id'])
-    tal = tal[['team_id', 'season'] + have].drop_duplicates(['team_id', 'season'])
-    return stats_df.merge(tal, on=['team_id', 'season'], how='left')
+    src = src.dropna(subset=['team_id']).copy()
+    src['team_id'] = pd.to_numeric(src['team_id'], errors='coerce')
+    src = src.dropna(subset=['team_id'])
+    src = src[['team_id', 'season'] + have].drop_duplicates(['team_id', 'season'])
+    return stats_df.merge(src, on=['team_id', 'season'], how='left')
+
+
+def _add_talent(stats_df: pd.DataFrame, path: str = TALENT_FILE) -> pd.DataFrame:
+    stats_df = _merge_by_team_season(stats_df, path, TALENT_FEATURES)
+    return _merge_by_team_season(stats_df, ROSTER_TALENT_FILE,
+                                 ROSTER_TALENT_FEATURES)
 
 
 def add_returning_production(stats_df: pd.DataFrame,
@@ -299,7 +319,8 @@ def add_returning_production(stats_df: pd.DataFrame,
     ret = ret[['team_id', 'season'] + have].drop_duplicates(['team_id', 'season'])
     merged = stats_df.merge(ret, on=['team_id', 'season'], how='left')
     merged = _add_talent(merged)
-    have = have + [c for c in TALENT_FEATURES if c in merged.columns]
+    have = have + [c for c in TALENT_FEATURES + ROSTER_TALENT_FEATURES
+                   if c in merged.columns]
 
     # Fill rather than leave missing. Returning production starts in 2015, and
     # the defensive figure in 2017, but merge_games_and_stats drops any row with

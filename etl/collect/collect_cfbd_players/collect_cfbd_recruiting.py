@@ -48,16 +48,23 @@ def main():
     headers = {'Authorization': f'Bearer {key}'}
     os.makedirs(args.out_dir, exist_ok=True)
 
-    talent, classes = [], []
+    talent, classes, players = [], [], []
     for year in range(args.start_year, args.end_year + 1):
         t = fetch('/talent', headers, {'year': year})
         c = fetch('/recruiting/teams', headers, {'year': year})
+        # Per-recruit rows are what let roster.recruitIds be resolved into an
+        # actual star rating, which is the difference between measuring the
+        # talent a team signed and the talent it currently has.
+        p = fetch('/recruiting/players', headers, {'year': year})
         if t:
             talent.append(pd.DataFrame(t))
         if c:
             classes.append(pd.DataFrame(c))
-        print(f"  {year}: talent {len(t) if t else 0:>4} teams   "
-              f"recruiting class {len(c) if c else 0:>4} teams")
+        if p:
+            players.append(pd.DataFrame(p))
+        print(f"  {year}: talent {len(t) if t else 0:>4}   "
+              f"class {len(c) if c else 0:>4}   "
+              f"recruits {len(p) if p else 0:>5}")
         time.sleep(args.pause)
 
     if talent:
@@ -69,6 +76,12 @@ def main():
         df = pd.concat(classes, ignore_index=True)
         df.to_csv(os.path.join(args.out_dir, 'cfbd_recruiting.csv'), index=False)
         print(f"wrote cfbd_recruiting.csv {len(df):>6} rows, "
+              f"{int(df.year.min())}-{int(df.year.max())}")
+    if players:
+        df = pd.concat(players, ignore_index=True)
+        df = df.drop(columns=[c for c in ('hometownInfo',) if c in df.columns])
+        df.to_csv(os.path.join(args.out_dir, 'cfbd_recruits.csv'), index=False)
+        print(f"wrote cfbd_recruits.csv    {len(df):>6} rows, "
               f"{int(df.year.min())}-{int(df.year.max())}")
 
 

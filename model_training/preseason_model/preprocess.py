@@ -153,6 +153,16 @@ TALENT_FILE = os.path.normpath(
                  'team_talent.csv'))
 TALENT_FEATURES = ['talent_roll_pct']
 
+# Talent present on the roster, from roster.recruitIds joined to per-recruit
+# ratings. Worth a further -0.059 MAE (t=-2.76) alongside the class-points
+# measure; neither replaces the other, because one carries the momentum of a
+# strong recent haul and the other reflects who is actually there after
+# transfers and attrition.
+ROSTER_TALENT_FILE = os.path.normpath(
+    os.path.join(_HERE, '..', '..', 'etl', 'summarize', 'results',
+                 'roster_talent.csv'))
+ROSTER_TALENT_FEATURES = ['blue_chip_ratio_pct', 'top22_rating_pct']
+
 
 def add_returning_production(stats_df: pd.DataFrame,
                              path: str = RETURNING_FILE) -> pd.DataFrame:
@@ -185,9 +195,12 @@ def add_returning_production(stats_df: pd.DataFrame,
     # with market lines (+0.712 to +0.757). CFBD's own 247 roster composite is
     # marginally stronger but stops at 2025, so the rolling class version is
     # used instead - it exists for a season that has not been played.
-    if os.path.exists(TALENT_FILE):
-        tal = pd.read_csv(TALENT_FILE, low_memory=False)
-        tcols = [c for c in TALENT_FEATURES if c in tal.columns]
+    for path, wanted in ((TALENT_FILE, TALENT_FEATURES),
+                         (ROSTER_TALENT_FILE, ROSTER_TALENT_FEATURES)):
+        if not os.path.exists(path):
+            continue
+        tal = pd.read_csv(path, low_memory=False)
+        tcols = [c for c in wanted if c in tal.columns]
         if tcols and 'team_id' in tal.columns:
             tal = tal.dropna(subset=['team_id']).copy()
             tal['team_id'] = pd.to_numeric(tal['team_id'], errors='coerce')
