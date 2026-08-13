@@ -74,7 +74,12 @@ class AnalyticsConfig:
     
     # Output
     output_dir: str = "results"
-    round_decimals: int = 2
+    # Two decimals quantised the model's own inputs. Explosive rush rate
+    # averages 0.032, so rounding it to 0.03 is a 16% error and collapsed
+    # 3,655 team-seasons onto 13 distinct values - a feature the trees could
+    # barely split on. Six keeps every rate's precision without bloating the
+    # file, since these are all bounded quantities.
+    round_decimals: int = 6
 
 
 class CFBDataLoader:
