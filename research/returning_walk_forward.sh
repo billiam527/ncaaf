@@ -44,7 +44,7 @@ for side, idcol in (('home','home_team_id'), ('away','away_team_id')):
 sided = lambda cols: [f'{s}_{c}' for s in ('home','away') for c in cols
                       if f'{s}_{c}' in feat.columns]
 SETS = {'base (model as-is)': BASE,
-        'base + offence starters': BASE + sided(OFF_ST),
+        'base + offense starters': BASE + sided(OFF_ST),
         'base + lean returning': BASE + sided(LEAN),
         'base + all returning': BASE + sided(RET_ALL)}
 

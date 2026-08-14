@@ -66,7 +66,7 @@ STARTER_SLOTS = {'QB': 1, 'RB': 1, 'WR': 3, 'TE': 1, 'OL': 5,
 SKILL_GROUPS = ('QB', 'RB', 'WR', 'TE')
 DEFENSIVE_GROUPS = ('DL', 'LB', 'DB')
 
-# Defence is pooled rather than split. Measured against residualised scoring
+# Defense is pooled rather than split. Measured against residualised scoring
 # margin on 1,203 team-seasons, one feature built from the top 11 defenders by
 # tackles beats the three position groups put together:
 #
@@ -77,7 +77,7 @@ DEFENSIVE_GROUPS = ('DL', 'LB', 'DB')
 # Splitting hurts for two reasons. The position strings are applied
 # inconsistently between teams and years (DE, EDGE, DT, NT and DL all overlap),
 # and the halves move together anyway - front seven and secondary returning
-# rates correlate +0.340. Offence keeps its split because the roles there are
+# rates correlate +0.340. Offense keeps its split because the roles there are
 # genuinely distinct and usage is published per player.
 DEFENSE_ON_FIELD = 11
 
@@ -121,10 +121,10 @@ def build_player_seasons():
 
     # defensive production: total tackles stand in for time on the field
     d = stats[(stats['category'] == 'defensive') & (stats['statType'] == 'TOT')]
-    defence = d[['season', 'team', 'playerId', 'position', 'stat']].copy()
-    defence = defence.rename(columns={'playerId': 'id', 'stat': 'production'})
-    defence['group'] = defence['position'].map(POSITION_GROUPS)
-    defence = defence[defence['group'].isin(DEFENSIVE_GROUPS)]
+    defense = d[['season', 'team', 'playerId', 'position', 'stat']].copy()
+    defense = defense.rename(columns={'playerId': 'id', 'stat': 'production'})
+    defense['group'] = defense['position'].map(POSITION_GROUPS)
+    defense = defense[defense['group'].isin(DEFENSIVE_GROUPS)]
 
     # special teams: attempts
     st = stats[((stats['category'] == 'kicking') & (stats['statType'] == 'FGA'))
@@ -133,7 +133,7 @@ def build_player_seasons():
     special = special.rename(columns={'playerId': 'id', 'stat': 'production'})
     special['group'] = 'ST'
 
-    produced = pd.concat([skill, defence, special], ignore_index=True)
+    produced = pd.concat([skill, defense, special], ignore_index=True)
     produced['production'] = pd.to_numeric(produced['production'], errors='coerce')
     produced = produced.dropna(subset=['production', 'team'])
     produced = produced[produced['production'] > 0]
@@ -223,8 +223,8 @@ def returning_features(players, roster, season):
                     half.loc[half.returns, 'production'].sum() / htot
                     if htot else np.nan)
 
-        # Defence pooled across position groups - see DEFENSE_ON_FIELD above.
-        # Ranking happens across the whole defence rather than within a group,
+        # Defense pooled across position groups - see DEFENSE_ON_FIELD above.
+        # Ranking happens across the whole defense rather than within a group,
         # so the eleven who played most are the eleven counted, whatever the
         # roster happens to call them.
         dfn = td[td['group'].isin(DEFENSIVE_GROUPS)]

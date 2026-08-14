@@ -10,7 +10,7 @@ the position/tier structure is built in etl/summarize/returning_production.py.
 
 What each source can and cannot support:
 
-  roster              every player with a position, including OL and defence
+  roster              every player with a position, including OL and defense
   player/usage        share of team plays - QB/RB/WR/TE only
   ppa/players/season  per-player PPA - QB/RB/WR/TE only
   stats/player/season season totals by category; 'defensive' reaches DL/LB/DB

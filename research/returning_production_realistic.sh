@@ -70,7 +70,7 @@ print("\n=== production-realistic: each model trains on all rows IT can use ==="
 res={}
 res['base']=run('base only (trains back to 2013)',BASE)
 res['full']=run('base + 7 returning (2017+ only)',BASE+sided(FULL))
-res['nodef']=run('base + 6 returning, no defence (2015+)',BASE+sided(NODEF))
+res['nodef']=run('base + 6 returning, no defense (2015+)',BASE+sided(NODEF))
 
 b=res['base']
 print("\n=== vs base, on the common test games ===")

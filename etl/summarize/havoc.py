@@ -2,10 +2,10 @@
 """Havoc and high-leverage defensive stops, per team-game.
 
 Efficiency and explosiveness describe what happens on an average play. These
-describe disruption - how often a defence blows a play up before it starts, and
+describe disruption - how often a defense blows a play up before it starts, and
 how often it holds when holding matters. Unlike field position or finishing
 drives, neither is downstream of the success rates the model already has: a
-defence that generates chaos is doing something the per-play averages do not
+defense that generates chaos is doing something the per-play averages do not
 capture.
 
 Output is per team-game so it can go through the same ridge opponent adjustment
@@ -145,8 +145,8 @@ def main():
     o = o.groupby(['game_id', 'team_id'], as_index=False).sum()
     o = o.merge(games, on='game_id', how='inner')
 
-    # everything above is from the OFFENCE's point of view; credit it to the
-    # defence that faced it
+    # everything above is from the OFFENSE's point of view; credit it to the
+    # defense that faced it
     o['def_id'] = np.where(o['team_id'] == o['home_team_id'],
                            o['away_team_id'], o['home_team_id'])
 
@@ -156,7 +156,7 @@ def main():
         'season': d['season'],
         # tfl only fires on rushing plays, so it belongs over rushing plays -
         # dividing by every snap mixes in dropbacks it could never occur on and
-        # makes pass-heavy schedules look like good run defences
+        # makes pass-heavy schedules look like good run defenses
         'tfl_rate': d['tfl'] / d['rush_plays'].replace(0, np.nan),
         'sack_rate': d['sack'] / d['pass_plays'].replace(0, np.nan),
         'pass_defensed_rate': d['pbu'] / d['pass_plays'].replace(0, np.nan),

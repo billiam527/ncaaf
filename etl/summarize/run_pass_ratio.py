@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run/pass balance per team-season, offence and defence.
+"""Run/pass balance per team-season, offense and defense.
 
 The model already knows how well a team runs and passes - rush_success,
 pass_success, epa_per_rush, epa_per_pass are all in there - but not how often it
@@ -16,7 +16,7 @@ raw one - early downs, within one score, before the fourth quarter - which is
 much closer to play-calling identity.
 
 Defensive rates are what opponents chose to do against this team, which carries
-its own signal: opponents run at defences that cannot stop the run.
+its own signal: opponents run at defenses that cannot stop the run.
 
 Garbage time is kept, matching season_summaries and havoc. The note that used
 to sit here said garbage_time_ind was zero on every row and so unusable - that
@@ -76,7 +76,7 @@ def accumulate(chunk, games, acc):
                     & (c['lead'].abs() <= ONE_SCORE)
                     & (c['period'] <= 3))
 
-    # offence: the team with the ball. defence: their opponent that game.
+    # offense: the team with the ball. defense: their opponent that game.
     c['opp_id'] = np.where(is_home, c['away_team_id'], c['home_team_id'])
 
     for side, idcol in (('off', 'team_id'), ('def', 'opp_id')):

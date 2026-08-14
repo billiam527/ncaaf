@@ -758,7 +758,7 @@ class GameStatsCalculator:
         variants), and averaging a running average weights the first play of a
         game as heavily as the whole rest of it.
 
-        Old Dominion's 2025 passing offence is what surfaced this. Their true
+        Old Dominion's 2025 passing offense is what surfaced this. Their true
         figure is 8.1 yards per pass play, which is what their own site lists;
         the mean of the running column made it 10.2 and put them 2nd in FBS.
         Against a correct recomputation of the 2025 season the old values
@@ -787,7 +787,7 @@ class GameStatsCalculator:
                     value = (stat_data.mean() if stat_data.max() <= 1.0
                              else stat_data.sum())
 
-            # Defensive EPA is stored as suppression: a defence that gives up
+            # Defensive EPA is stored as suppression: a defense that gives up
             # negative EPA scores positively. Note this makes the EPA _def
             # columns the opposite polarity to the success and yardage _def
             # columns, which hold what was allowed.

@@ -2,17 +2,17 @@
 """Opponent-adjust the havoc rates, weighting each game by its denominator.
 
 The ridge is the same one every other statistic goes through - each team-game
-rate is split into a defence effect, an offence effect and an intercept, so
+rate is split into a defense effect, an offense effect and an intercept, so
 
-    observed = league mean + defence effect + offence effect + residual
-    adjusted = league mean + defence effect
+    observed = league mean + defense effect + offense effect + residual
+    adjusted = league mean + defense effect
 
-with the defence effect read back as the team's rating. What is different here
+with the defense effect read back as the team's rating. What is different here
 is the weighting, and it matters more for havoc than for anything else.
 
 Efficiency statistics are measured over 60-80 snaps a game, so every game
 carries roughly equal evidence and an unweighted fit is close to right. Havoc
-rates are not: a defence can face 55 dropbacks one week and 13 the next, and
+rates are not: a defense can face 55 dropbacks one week and 13 the next, and
 sacks are rare enough that a small denominator produces wild rates. Old
 Dominion 2025 is the worked example - 7 sacks on 20 dropbacks against Troy
 (35.0%) and 1 on 55 against App State (1.8%). Pooling their season gives

@@ -87,7 +87,7 @@ def build(weight, label, absolute=False):
     fr=pd.DataFrame(rows); fr['team_id']=fr['team'].map(name2id)
     return fr[['season','team_id',label]]
 
-print("\n=== weighting schemes, offence skill positions ===")
+print("\n=== weighting schemes, offense skill positions ===")
 p['q_use']=p['use']
 p['q_tot']=p['tot'].clip(lower=0)
 p['q_mix']=p['use']*p['avg'].clip(lower=-0.2)

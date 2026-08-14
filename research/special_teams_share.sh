@@ -21,7 +21,7 @@ if 'epa' in st.columns:
     print(f"  ST plays with EPA: {len(e)}  mean {e.mean():+.4f}  sd {e.std():.3f}")
     print(f"  total |EPA| on ST: {e.abs().sum():,.0f}")
     off = p[p.offensive_play == 1]['epa'].dropna()
-    print(f"  total |EPA| on offence: {off.abs().sum():,.0f}")
+    print(f"  total |EPA| on offense: {off.abs().sum():,.0f}")
     print(f"  ST share of all EPA magnitude: {e.abs().sum()/(e.abs().sum()+off.abs().sum()):.1%}")
 
 print("\n=== breakdown by ST play type ===")

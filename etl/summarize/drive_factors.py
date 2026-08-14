@@ -8,15 +8,15 @@ differ by a touchdown a game because one starts drives near midfield and cashes
 its red-zone trips while the other kicks field goals from the twenty.
 
   field position     mean yards-to-goal at the start of a possession, and the
-                     same figure for possessions the defence hands over
+                     same figure for possessions the defense hands over
   finishing drives   points per trip inside the opponent's forty
 
 Points are read from play_type_text on scoring plays rather than from the score
 columns or from actual_points. actual_points is zero on all but safeties, and
 the running score is attached post-play but reverts on the following kickoff
 row, so differencing it across a drive gives the wrong answer about a third of
-the time. Only the offence's own scoring counts - a pick-six on a drive is not
-that offence finishing well.
+the time. Only the offense's own scoring counts - a pick-six on a drive is not
+that offense finishing well.
 
 Usage:
     python drive_factors.py --out results/drive_factors.csv
@@ -40,7 +40,7 @@ CHUNK = 500_000
 # time on purpose; season_summaries and havoc both keep it.
 KEEP_GARBAGE_TIME = False
 
-# Points credited to the offence, by the text ESPN uses on a scoring play.
+# Points credited to the offense, by the text ESPN uses on a scoring play.
 #
 # The vocabulary changes partway through the data. Through about 2011 a
 # touchdown is "Rush" or "Pass Completion" and the conversion appears
@@ -56,7 +56,7 @@ TOUCHDOWN_POINTS = 7
 FIELD_GOAL = 'field goal good'
 FIELD_GOAL_POINTS = 3
 
-# Scoring plays that belong to the defence, or to no offence at all. Checked
+# Scoring plays that belong to the defense, or to no offense at all. Checked
 # before the touchdown match, since "Interception Return Touchdown" would
 # otherwise be read as a passing touchdown.
 NOT_OFFENSE = ('interception', 'fumble', 'punt return', 'kickoff return',
@@ -66,7 +66,7 @@ INSIDE_40 = 40
 
 
 def drive_points(texts):
-    """Points the offence scored on one drive."""
+    """Points the offense scored on one drive."""
     total = 0
     for t in texts:
         s = str(t).lower().strip()
@@ -153,7 +153,7 @@ def main():
     drives = drives.merge(games, on='game_id', how='inner')
     print(f"drives: {len(drives):,}")
 
-    # the defence's view: whichever side did not have the ball
+    # the defense's view: whichever side did not have the ball
     drives['opp_id'] = np.where(drives['team_id'] == drives['home_team_id'],
                                 drives['away_team_id'], drives['home_team_id'])
     drives['trip'] = drives['reached'].fillna(False).astype(bool)
