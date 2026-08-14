@@ -125,8 +125,12 @@ def main():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--season', type=int, default=2026)
+    ap.add_argument('--from-season', type=int, default=None,
+                    help='project every season from here to --season, each '
+                         'fitted only on what came before it')
     ap.add_argument('--fit-cutoff', type=int, default=2022,
-                    help='fit on seasons up to here, hold out the rest')
+                    help='fit on seasons up to here, hold out the rest, for '
+                         'the reported skill figures only')
     ap.add_argument('--out', default=os.path.join(
         _HERE, 'results', 'qb_projection.csv'))
     args = ap.parse_args()
@@ -164,54 +168,75 @@ def main():
 
     mu, sd = D['rating'].mean(), D['rating'].std()
     classif = load('classification')
-    fbs = set(classif.loc[(classif['season'] == args.season)
-                          & (classif['fbs'] == 1), 'team'])
     teams = pd.read_csv(TEAMS)
     name_to_id = dict(zip(teams['location'], teams['id']))
 
-    r = roster[(roster['season'] == args.season)
-               & (roster['position'] == 'QB')].copy()
-    r = r[r['team'].isin(fbs)]
-    r = r.merge(recruits[['id', 'rating', 'stars']].rename(
-        columns={'id': 'rid'}), on='rid', how='left')
-    r = r.merge(career_to_date(prod, args.season), on='pid', how='left')
-    r['who'] = r['firstName'].astype(str) + ' ' + r['lastName'].astype(str)
-    r['rating_z'] = (r['rating'] - mu) / sd
+    seasons = ([args.season] if args.from_season is None
+               else list(range(args.from_season, args.season + 1)))
 
-    def project(row):
-        has_rec = pd.notna(row['prior_z'])
-        has_rat = pd.notna(row['rating_z'])
-        if has_rec and has_rat:
-            return (m_exp.intercept_ + m_exp.coef_[0] * row['rating_z']
-                    + m_exp.coef_[1] * row['prior_z'])
-        if has_rec:
-            return m_exp.intercept_ + m_exp.coef_[1] * row['prior_z']
-        if has_rat:
-            return m_new.intercept_ + m_new.coef_[0] * row['rating_z']
-        return np.nan
+    all_players = []
+    for season in seasons:
+        # Refit on everything strictly before this season. Using one global fit
+        # would let a 2015 projection borrow coefficients estimated partly from
+        # 2020, which is the kind of leak that makes a backtest look better than
+        # the thing it is testing.
+        if len(seasons) > 1:
+            hist = prod[prod['season'] < season]
+            if hist['season'].nunique() < 3:
+                continue
+            mn, me, _, _ = fit_blend(hist, hist['season'].max())
+        else:
+            mn, me = m_new, m_exp
 
-    r['projected_z'] = r.apply(project, axis=1)
-    # what stars alone would have said, so the two can be compared directly
-    r['recruiting_only_z'] = np.where(
-        r['rating_z'].notna(),
-        m_new.intercept_ + m_new.coef_[0] * r['rating_z'], np.nan)
-    r['basis'] = np.where(r['prior_z'].notna(), 'production', 'recruiting')
-    print(f"\n{args.season}: {len(r)} FBS roster quarterbacks, "
-          f"{r['projected_z'].notna().mean():.0%} projectable, "
-          f"{r['prior_z'].notna().mean():.0%} with a record")
+        fbs = set(classif.loc[(classif['season'] == season)
+                              & (classif['fbs'] == 1), 'team'])
+        r = roster[(roster['season'] == season)
+                   & (roster['position'] == 'QB')].copy()
+        r = r[r['team'].isin(fbs)]
+        if r.empty:
+            continue
+        r = r.merge(recruits[['id', 'rating', 'stars']].rename(
+            columns={'id': 'rid'}), on='rid', how='left')
+        r = r.merge(career_to_date(prod, season), on='pid', how='left')
+        r['who'] = r['firstName'].astype(str) + ' ' + r['lastName'].astype(str)
+        r['rating_z'] = (r['rating'] - mu) / sd
 
-    r['team_id'] = r['team'].map(name_to_id)
-    cols = ['team_id', 'team', 'pid', 'who', 'rating', 'stars', 'prior_z',
-            'prior_plays', 'recruiting_only_z', 'projected_z', 'basis']
-    players = r.dropna(subset=['projected_z'])[cols].sort_values(
-        'projected_z', ascending=False)
-    players.insert(0, 'season', args.season)
+        def project(row):
+            has_rec = pd.notna(row['prior_z'])
+            has_rat = pd.notna(row['rating_z'])
+            if has_rec and has_rat:
+                return (me.intercept_ + me.coef_[0] * row['rating_z']
+                        + me.coef_[1] * row['prior_z'])
+            if has_rec:
+                return me.intercept_ + me.coef_[1] * row['prior_z']
+            if has_rat:
+                return mn.intercept_ + mn.coef_[0] * row['rating_z']
+            return np.nan
+
+        r['projected_z'] = r.apply(project, axis=1)
+        # what stars alone would have said, so the two can be compared directly
+        r['recruiting_only_z'] = np.where(
+            r['rating_z'].notna(),
+            mn.intercept_ + mn.coef_[0] * r['rating_z'], np.nan)
+        r['basis'] = np.where(r['prior_z'].notna(), 'production', 'recruiting')
+        r['team_id'] = r['team'].map(name_to_id)
+        cols = ['team_id', 'team', 'pid', 'who', 'rating', 'stars', 'prior_z',
+                'prior_plays', 'recruiting_only_z', 'projected_z', 'basis']
+        part = r.dropna(subset=['projected_z'])[cols].copy()
+        part.insert(0, 'season', season)
+        all_players.append(part)
+        print(f"  {season}: {len(r):>4} roster QBs, "
+              f"{r['projected_z'].notna().mean():>4.0%} projectable, "
+              f"{r['prior_z'].notna().mean():>4.0%} with a record")
+
+    players = pd.concat(all_players, ignore_index=True).sort_values(
+        ['season', 'projected_z'], ascending=[True, False])
 
     # the team takes its best projected arm, as QB1 takes its best rated one
-    best = players.drop_duplicates('team').copy()
-    best['qb_rank'] = best['projected_z'].rank(
-        ascending=False, method='min').astype(int)
-    best['qb_pct'] = best['projected_z'].rank(pct=True)
+    best = players.drop_duplicates(['season', 'team']).copy()
+    best['qb_rank'] = (best.groupby('season')['projected_z']
+                       .rank(ascending=False, method='min').astype(int))
+    best['qb_pct'] = best.groupby('season')['projected_z'].rank(pct=True)
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     best.to_csv(args.out, index=False)
@@ -220,8 +245,9 @@ def main():
     print(f"wrote {args.out.replace('.csv', '_players.csv')} "
           f"({len(players)} quarterbacks)")
 
-    show = best.nsmallest(12, 'qb_rank')
-    print(f"\n  {'#':>3} {'team':<20}{'quarterback':<22}{'proj':>7}"
+    show = best[best['season'] == max(seasons)].nsmallest(12, 'qb_rank')
+    print(f"\n  {max(seasons)}")
+    print(f"  {'#':>3} {'team':<20}{'quarterback':<22}{'proj':>7}"
           f"{'stars say':>11}{'basis':>13}")
     for _, x in show.iterrows():
         ro_ = f"{x.recruiting_only_z:+.2f}" if pd.notna(
