@@ -93,12 +93,22 @@ def main():
     recruits['rating'] = pd.to_numeric(recruits['rating'], errors='coerce')
     recruits['stars'] = pd.to_numeric(recruits['stars'], errors='coerce')
 
+    # Roster size before the join, so coverage can be reported. It is not a
+    # footnote: within FBS the median team has 61% of its roster rated, but
+    # the service academies sit near 10% because their players are largely
+    # unrated by the services. A rating computed over 12 of 141 players is a
+    # different kind of number to one computed over 90 of 110, and coverage
+    # correlates +0.60 with the rating itself.
+    size = (roster.groupby(['team', 'season']).size()
+            .rename('roster_n').reset_index())
+
     j = roster.dropna(subset=['rid']).merge(
         recruits[['id', 'stars', 'rating']], left_on='rid', right_on='id',
         how='inner', suffixes=('', '_rec')).dropna(subset=['rating'])
     j['group'] = j['position'].map(POSITION_GROUPS)
     j['blue'] = j['stars'] >= 4
-    print(f"roster {len(roster):,} rows, joined and rated {len(j):,}")
+    print(f"roster {len(roster):,} rows, joined and rated {len(j):,} "
+          f"({len(j)/len(roster):.1%})")
     unmapped = sorted(set(j.loc[j['group'].isna(), 'position'].dropna()))
     if unmapped:
         print(f"  positions with no group (dropped): {unmapped}")
@@ -123,6 +133,8 @@ def main():
         rows.append(row)
 
     out = pd.DataFrame(rows)
+    out = out.merge(size, on=['team', 'season'], how='left')
+    out['coverage'] = out['linked'] / out['roster_n']
 
     # Within-season rank and percentile. Levels drift as the services re-rate,
     # so the rank is the comparable number, not the rating.
@@ -137,7 +149,8 @@ def main():
     out['conference'] = out['team'].map(conf)
     print(f"team id match: {out['team_id'].notna().mean():.1%}")
 
-    cols = ['team_id', 'team', 'conference', 'season', 'linked']
+    cols = ['team_id', 'team', 'conference', 'season',
+            'linked', 'roster_n', 'coverage']
     for grp in GROUPS:
         cols += [f'{grp}_rating', f'{grp}_rank', f'{grp}_pct',
                  f'{grp}_n', f'{grp}_blue', f'{grp}_blue_pct']
