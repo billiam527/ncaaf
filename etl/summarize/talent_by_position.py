@@ -74,6 +74,40 @@ def first_recruit_id(value):
     return None
 
 
+def starter_rating():
+    """Recruiting rating of the quarterback who actually took the most snaps.
+
+    Diagnostic only. Usage exists only for seasons that have been played, so
+    this is empty for the season being predicted and cannot be a feature.
+    """
+    roster = load('roster')
+    recruits = load('recruits')[['id', 'rating']]
+    recruits['id'] = recruits['id'].astype(str)
+    recruits['rating'] = pd.to_numeric(recruits['rating'], errors='coerce')
+
+    roster['group'] = roster['position'].map(POSITION_GROUPS)
+    qb = roster[roster['group'] == 'QB'].copy()
+    qb['rid'] = qb['recruitIds'].map(first_recruit_id)
+    qb = qb.merge(recruits.rename(columns={'id': 'rid'}), on='rid', how='left')
+    qb['pid'] = qb['id'].astype(str)
+
+    usage = load('usage')
+    usage = usage[usage['position'] == 'QB'][
+        ['season', 'id', 'team', 'usage_overall']].copy()
+    usage['pid'] = usage['id'].astype(str)
+
+    j = qb.merge(usage[['season', 'pid', 'team', 'usage_overall']],
+                 on=['season', 'pid', 'team'], how='inner')
+    j = j.dropna(subset=['usage_overall', 'rating'])
+    if j.empty:
+        return pd.DataFrame(columns=['team', 'season', 'QB_starter_rating'])
+    idx = j.groupby(['team', 'season'])['usage_overall'].idxmax()
+    out = j.loc[idx, ['team', 'season', 'rating']].rename(
+        columns={'rating': 'QB_starter_rating'})
+    out['season'] = out['season'].astype(int)
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__,
@@ -138,15 +172,36 @@ def main():
                 row[f'{grp}_rating'] = np.nan
                 row[f'{grp}_blue'] = np.nan
                 row[f'{grp}_blue_pct'] = np.nan
+
+        # Quarterback is the one position where the room mean is the wrong
+        # shape. One player takes essentially every snap, so averaging him
+        # with three backups measures depth, not the position. Georgia 2025
+        # is the case: Gunner Stockton at 0.9506 pulled to 0.9111 by two
+        # third-stringers in the 0.84-0.88 range, which is most of the
+        # distance between 20th and top five.
+        #
+        # The top-rated arm is used rather than the player who actually
+        # started, because the starter is only knowable after the season and
+        # this feeds a preseason model - 2026 has usage for 0% of its
+        # quarterbacks. The two agree 61% of the time and correlate +0.877,
+        # and where they differ the top-rated sits about +0.04 above.
+        qb = g[g['group'] == 'QB']
+        row['QB1_rating'] = float(qb['rating'].max()) if len(qb) else np.nan
         rows.append(row)
 
     out = pd.DataFrame(rows)
     out = out.merge(size, on=['team', 'season'], how='left')
     out['coverage'] = out['linked'] / out['roster_n']
 
+    # The rating of whoever actually took the most snaps, carried for
+    # comparison only. It cannot be a model feature - it does not exist until
+    # the season is played - but it is what QB1 is standing in for, so it
+    # belongs in the file where the substitution can be checked.
+    out = out.merge(starter_rating(), on=['team', 'season'], how='left')
+
     # Within-season rank and percentile. Levels drift as the services re-rate,
     # so the rank is the comparable number, not the rating.
-    for grp in GROUPS:
+    for grp in list(GROUPS) + ['QB1']:
         col = f'{grp}_rating'
         out[f'{grp}_rank'] = (out.groupby('season')[col]
                               .rank(ascending=False, method='min')
@@ -160,7 +215,8 @@ def main():
     print(f"conference match: {out['conference'].notna().mean():.1%}")
 
     cols = ['team_id', 'team', 'conference', 'season',
-            'linked', 'roster_n', 'coverage']
+            'linked', 'roster_n', 'coverage',
+            'QB1_rating', 'QB1_rank', 'QB1_pct', 'QB_starter_rating']
     for grp in GROUPS:
         cols += [f'{grp}_rating', f'{grp}_rank', f'{grp}_pct',
                  f'{grp}_n', f'{grp}_blue', f'{grp}_blue_pct']
