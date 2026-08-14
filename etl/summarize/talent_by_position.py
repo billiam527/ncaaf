@@ -86,7 +86,15 @@ def main():
     recruits = load('recruits')
     teams = load('teams')
     name_to_id = dict(zip(teams['school'], teams['id']))
-    conf = dict(zip(teams['school'], teams['conference']))
+
+    # Conference has to come from the per-season classification file, not from
+    # cfbd_teams. cfbd_teams carries only the CURRENT conference, which back-
+    # dates every realignment: it puts Texas in the SEC in 2015 and USC in the
+    # Big Ten in 2016, and erases the Pac-12 entirely. That mislabels 17% of
+    # team-seasons, concentrated in 2017-2022.
+    cls = load('classification')
+    conf = {(r.team, int(r.season)): r.conference
+            for r in cls.itertuples() if pd.notna(r.conference)}
 
     roster['rid'] = roster['recruitIds'].map(first_recruit_id)
     recruits['id'] = recruits['id'].astype(str)
@@ -146,8 +154,10 @@ def main():
         out[f'{grp}_pct'] = out.groupby('season')[col].rank(pct=True)
 
     out['team_id'] = out['team'].map(name_to_id)
-    out['conference'] = out['team'].map(conf)
+    out['conference'] = [conf.get((t, s)) for t, s in
+                         zip(out['team'], out['season'])]
     print(f"team id match: {out['team_id'].notna().mean():.1%}")
+    print(f"conference match: {out['conference'].notna().mean():.1%}")
 
     cols = ['team_id', 'team', 'conference', 'season',
             'linked', 'roster_n', 'coverage']
