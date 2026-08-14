@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Project quarterback quality by blending recruiting grade with production.
 
 A recruiting grade is the best information available about a quarterback who
@@ -51,6 +51,30 @@ TEAMS = os.path.join(_HERE, '..', 'collect', 'collect_espn_teams', 'temp',
 
 # Below this a season is not a record, it is a cameo.
 MIN_PRIOR_PLAYS = 100
+
+# Reliability shrinkage was tried here and rejected on the evidence.
+#
+# The motivation was sound: a bad record is by construction a short one, since a
+# quarterback playing badly gets benched, so the downgrades rest on 120-220
+# plays while the upgrades rest on 800-1,300. Weighting the record by
+# plays/(plays+K) should have corrected that.
+#
+# It does not help. Swept over K on a walk-forward where each season is
+# predicted from strictly earlier seasons, mean correlation falls monotonically:
+#
+#     K        none    200     400     800    2000    4000
+#     mean r  0.4407  0.4399  0.4379  0.4350  0.4307  0.4280
+#
+# An earlier sweep appeared to favour K=800, but its splits (>2020, >2021,
+# >2022, >2023) share test rows with one another, so the same seasons were
+# scored repeatedly and the apparent gain was selection on reused data. The
+# likely reason it adds nothing: the fitted coefficient on the record already
+# absorbs its average unreliability, and the career figure is play-weighted
+# within a player, so longer records already count for more. Shrinking on top of
+# that only attenuates real signal.
+#
+# Left documented rather than deleted so it is not re-derived from first
+# principles and re-added.
 
 
 def load(name):
@@ -114,8 +138,7 @@ def fit_blend(prod, cutoff):
     m_exp = LinearRegression().fit(b[['rating_z', 'prior_z']], b['z'])
     bt = test.dropna(subset=['rating_z', 'prior_z'])
     report['experienced'] = (len(b), len(bt),
-                             np.corrcoef(m_exp.predict(bt[['rating_z',
-                                                           'prior_z']]),
+                             np.corrcoef(m_exp.predict(bt[['rating_z', 'prior_z']]),
                                          bt['z'])[0, 1] if len(bt) > 5 else np.nan)
     return m_new, m_exp, D, report
 
@@ -221,7 +244,8 @@ def main():
         r['basis'] = np.where(r['prior_z'].notna(), 'production', 'recruiting')
         r['team_id'] = r['team'].map(name_to_id)
         cols = ['team_id', 'team', 'pid', 'who', 'rating', 'stars', 'prior_z',
-                'prior_plays', 'recruiting_only_z', 'projected_z', 'basis']
+                'prior_plays', 'recruiting_only_z',
+                'projected_z', 'basis']
         part = r.dropna(subset=['projected_z'])[cols].copy()
         part.insert(0, 'season', season)
         all_players.append(part)
@@ -258,3 +282,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
