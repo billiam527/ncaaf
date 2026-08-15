@@ -69,10 +69,19 @@ CHUNK = 400_000
 MIN_TARGETS = 25
 ALPHA = 1.0
 
-# Anything that can only follow the name, so the match stops there. "caught"
-# and "for" carry most of the weight.
+# Anything that can only follow the name, so the match stops there.
+#
+# "thrown" is the one that matters most and it is easy to miss: 14.6% of pass
+# plays read "incomplete short left to #6 K.Gross thrown to BSU36", and without
+# it the target parses as "K.Gross thrown", fails to resolve, and vanishes.
+# Because every one of those is an incompletion, losing them inflated every
+# catch rate on the page - Indiana's Charlie Becker read 34 of 35 rather than
+# 34 of 47. A per-player catch rate far above the team's is the symptom to
+# watch for if another of these turns up.
 STOP = (r"for|and|to|at|in|on|as|is|was|then|caught|out|no|gain|loss|yards?|"
-        r"yds?|PENALTY|TOUCHDOWN|1ST|2ND|3RD|4TH")
+        r"yds?|thrown|overthrown|underthrown|hurried|deflected|batted|"
+        r"defensed|dropped|intended|pressured|broken|blocked|"
+        r"PENALTY|TOUCHDOWN|1ST|2ND|3RD|4TH")
 _TOK = rf"(?!(?:{VERBS}|{STOP})\b)[A-Za-z][\w'\.\-]*"
 # capped at three tokens: beyond that the match starts swallowing team names
 _NAME = rf"{_TOK}(?:\s+{_TOK}){{0,2}}"
@@ -267,9 +276,21 @@ def main():
     d['td'] = pt.str.contains('touchdown', na=False) & d['caught']
     # yardage only counts on a catch; an incompletion carries none
     d['rec_yards'] = np.where(d['caught'], d['stat_yardage'].fillna(0), 0.0)
+    # Two independent ways this has gone wrong, so both are checked here. A
+    # figure near 99% means the play-type test is matching "incompletion" as
+    # "completion". A figure well above the true rate means named incompletions
+    # are being lost in the parse, which drops only failures and inflates
+    # everyone. The true rate is computed from play types alone, needing no
+    # target to be named at all.
+    pt_all = d['play_type_text'].astype(str).str.lower().str.strip()
+    n_caught = int(pt_all.isin(CAUGHT_TYPES).sum())
+    n_inc = int(pt_all.str.contains('incomplet', na=False).sum())
+    true_rate = n_caught / max(n_caught + n_inc, 1)
     print(f"  league catch rate {d['caught'].mean():.1%}"
-          f"   (a figure near 99% means the play-type test is matching "
-          f"'incompletion' as 'completion')")
+          f"   (independent check from play types alone: {true_rate:.1%})")
+    if abs(d['caught'].mean() - true_rate) > 0.03:
+        print("  WARNING: those disagree by more than 3 points, which means "
+              "targets are being lost asymmetrically")
 
     team = d.groupby(['team_id', 'season']).agg(
         team_targets=('epa', 'size'),
