@@ -64,10 +64,17 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 RESULTS = os.path.join(_HERE, 'results')
 
 # feature name -> (source file, column, what the model should read it as)
+# pf_wr is the wideouts alone, not the whole receiving corps. Tight end is split
+# out as pf_te because the model needs to be able to lose one without losing the
+# other - returning production carries a ret_TE_starter figure that nothing here
+# could reproduce while the two sat inside one number. Both come off the same
+# trimmed room, top four wideouts and top two tight ends, and both are already
+# standardized within position, so a tight end is scored against tight ends.
 SOURCES = {
     'pf_qb': ('qb_projection.csv', 'projected_z', 'quarterback'),
     'pf_rb': ('rb_projection.csv', 'backfield', 'backfield'),
-    'pf_wr': ('receiver_projection.csv', 'projected_corps', 'receiving corps'),
+    'pf_wr': ('receiver_projection.csv', 'projected_wr', 'wide receivers'),
+    'pf_te': ('receiver_projection.csv', 'projected_te', 'tight ends'),
     'pf_ol': ('ol_projection.csv', 'proj_ol_rating', 'offensive line'),
     'pf_f7': ('front_seven.csv', 'proj_f7_rating', 'front seven'),
     'pf_db': ('defensive_backs.csv', 'proj_db_rating', 'secondary'),
@@ -78,6 +85,7 @@ LEAK_TARGET = {
     'pf_qb': 'adjusted_epa_per_pass_off',
     'pf_rb': 'adjusted_epa_per_rush_off',
     'pf_wr': 'adjusted_epa_per_pass_off',
+    'pf_te': 'adjusted_epa_per_pass_off',
     'pf_ol': 'adjusted_epa_per_rush_off',
     'pf_f7': 'adjusted_epa_per_play_def',
     'pf_db': 'adjusted_epa_per_play_def',
@@ -160,7 +168,7 @@ def main():
         print(f"  {f:<9}{base[f].notna().sum():>8,}{base[f].mean():>8.3f}"
               f"{base[f].std():>8.3f}   {src}:{col}")
     full = base.dropna(subset=cols)
-    print(f"\n  rows with all six: {len(full):,} "
+    print(f"\n  rows with all {len(cols)}: {len(full):,} "
           f"({int(full.season.min())}-{int(full.season.max())})")
 
     if args.check:

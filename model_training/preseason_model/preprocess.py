@@ -177,9 +177,13 @@ ROSTER_TALENT_FEATURES = []  # was ['blue_chip_ratio_pct', 'top22_rating_pct']
 # position_ratings.py --check re-runs the leakage test on every column.
 #
 # They also replaced the roster-talent pair above, which they made redundant.
-# Returning production they did NOT replace: dropping it costs +0.042 MAE
-# (t=+2.99) even with these present, because ret_TE_starter and the quality-
-# weighted ret_good / ret_bad cover ground no unit rating does.
+# Returning production they did NOT replace: dropping it costs +0.070 MAE
+# (t=+4.68) even with all seven of these present. Splitting tight end out into
+# pf_te was tried specifically to close that gap and did not - dropping
+# returning production is worse WITH pf_te than without it, ret_TE_starter ranks
+# last of 102 features at 0.0000 gain, and ret_good / ret_bad alone recover less
+# than half the loss. Whatever returning production carries is spread across its
+# seven columns collectively and is still unaccounted for.
 #
 # Measured against margin over 6,135 games alongside prior-season adjusted EPA,
 # they are worth +0.044 R2 and 0.395 points of MAE - but unevenly. Dropping the
@@ -189,7 +193,8 @@ ROSTER_TALENT_FEATURES = []  # was ['blue_chip_ratio_pct', 'top22_rating_pct']
 POSITION_FILE = os.path.normpath(
     os.path.join(_HERE, '..', '..', 'etl', 'summarize', 'results',
                  'position_ratings.csv'))
-POSITION_FEATURES = ['pf_qb', 'pf_rb', 'pf_wr', 'pf_ol', 'pf_f7', 'pf_db']
+POSITION_FEATURES = ['pf_qb', 'pf_rb', 'pf_wr', 'pf_te', 'pf_ol', 'pf_f7',
+                     'pf_db']
 
 
 def add_returning_production(stats_df: pd.DataFrame,

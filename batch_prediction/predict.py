@@ -284,11 +284,12 @@ POSITION_FILE = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     '..', 'etl', 'summarize', 'results', 'position_ratings.csv'))
 
-# One rating per unit - quarterback, backfield, receiving corps, offensive line,
-# front seven, secondary - each from prior-season play blended with the
+# One rating per unit - quarterback, backfield, wideouts, tight ends, offensive
+# line, front seven, secondary - each from prior-season play blended with the
 # recruiting grade of the room as it now stands. Unlagged like returning
 # production, because each is already stamped onto the season it describes.
-POSITION_FEATURES = ['pf_qb', 'pf_rb', 'pf_wr', 'pf_ol', 'pf_f7', 'pf_db']
+POSITION_FEATURES = ['pf_qb', 'pf_rb', 'pf_wr', 'pf_te', 'pf_ol', 'pf_f7',
+                     'pf_db']
 
 
 def _merge_by_team_season(stats_df, path, wanted):

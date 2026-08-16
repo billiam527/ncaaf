@@ -318,6 +318,20 @@ def main():
                     projected_best=('projected', 'max'),
                     projected_n=('projected', 'size'),
                     arrivals=('moved', 'sum'))
+                # The corps figure sums wideouts and tight ends together, which
+                # is right for "how good is the receiving room" and wrong for
+                # anything that needs them apart - a model cannot dock a team
+                # for losing its tight end if the tight end is inside a single
+                # number. Both are already standardized within position, so a
+                # tight end is scored against tight ends and the two sums live
+                # on comparable scales.
+                for pos, nm in (('WR', 'projected_wr'), ('TE', 'projected_te')):
+                    s = (room[room['position'] == pos]
+                         .groupby('team')['projected'].sum())
+                    agg[nm] = agg['team'].map(s).fillna(0.0)
+                    n = (room[room['position'] == pos]
+                         .groupby('team')['projected'].size())
+                    agg[f'{nm}_n'] = agg['team'].map(n).fillna(0).astype(int)
                 by = (room.groupby(['team', 'basis'])['projected'].sum()
                       .unstack(fill_value=0.0).reset_index())
                 for c, nm in (('record', 'room_record'),
@@ -334,13 +348,15 @@ def main():
     print()
 
     R = pd.concat(out, ignore_index=True)
-    for c in ('projected_corps', 'room_record', 'room_freshman'):
+    for c in ('projected_corps', 'room_record', 'room_freshman',
+              'projected_wr', 'projected_te'):
         if c in R.columns:
             R[c] = R[c].fillna(0.0)
     if 'projected_corps' in R.columns:
         R['projected_total'] = R['projected_corps']
     cols = ['corps_share', 'corps_yards', 'best_share', 'best_yards']
-    for c in ('projected_corps', 'projected_best', 'projected_total'):
+    for c in ('projected_corps', 'projected_best', 'projected_total',
+              'projected_wr', 'projected_te'):
         if c in R.columns:
             cols.append(c)
     for c in cols:
