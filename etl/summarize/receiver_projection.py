@@ -98,6 +98,38 @@ def fit_projection(prod, cutoff=2022):
     return m, skill, len(P)
 
 
+# A recruit's chance of ever reaching a qualifying season, by band. Measured on
+# the 2014-2021 classes, whose careers are finished. This is the larger half of
+# the uncertainty about a freshman: whether he plays at all, not how well.
+PLAY_RATE = {5: 0.84, 4: 0.47, 3: 0.18, 2: 0.06}
+# first qualifying season from the recruiting grade alone, holdout r = +0.174
+FRESH_A, FRESH_B = -0.042, 0.187
+
+
+def project_freshmen(roster, recruits, season, rating_mu, rating_sd):
+    """Expected value from receivers with no record, mostly incoming recruits.
+
+    Two things have to be multiplied, and using either alone is wrong. A
+    five-star receiver reaches a qualifying season 84% of the time and a
+    two-star 6%, so most of a class contributes nothing; and conditional on
+    playing, the grade predicts his first season only weakly (+0.174). The
+    product is a small number for everyone, which is the honest answer - a
+    signing class is worth much less to next season than a returning starter.
+    """
+    r = roster[(roster['season'] == season)
+               & (roster['position'].isin(['WR', 'TE']))].copy()
+    r = r.merge(recruits[['id', 'rating', 'stars']].rename(
+        columns={'id': 'rid'}), on='rid', how='left')
+    r = r.dropna(subset=['rating', 'stars'])
+    if r.empty:
+        return pd.DataFrame()
+    r['p_play'] = r['stars'].astype(int).map(PLAY_RATE).fillna(0.06)
+    rz = (r['rating'] - rating_mu) / rating_sd
+    r['if_plays'] = FRESH_A + FRESH_B * rz
+    r['projected'] = r['p_play'] * r['if_plays']
+    return r
+
+
 def project_players(prod, roster, recruits, season, model):
     """Every returning receiver's expected value for `season`."""
     hist = prod[prod['season'] < season]
@@ -168,6 +200,15 @@ def main():
         on='rid', how='left')
     prod['exp'] = prod['season'] - prod['class_year']
 
+    rating_mu = float(prod['rating'].mean()) if 'rating' in prod.columns else None
+    if rating_mu is None:
+        rr = recruits[['id', 'rating']].copy()
+        rr['rating'] = pd.to_numeric(rr['rating'], errors='coerce')
+        rating_mu = float(rr['rating'].mean())
+        rating_sd = float(rr['rating'].std())
+    else:
+        rating_sd = float(prod['rating'].std())
+
     model, skill, n = fit_projection(prod)
     print(f"projection fitted on {n:,} consecutive pairs, "
           f"holdout r = {skill:+.3f}")
@@ -218,7 +259,20 @@ def main():
                 projected_n=('projected', 'size'),
                 arrivals=('moved', 'sum'))
             g = g.merge(agg, on='team', how='left')
-            players.append(pl.assign(season=season))
+            players.append(pl.assign(season=season, basis='record'))
+
+        # receivers with no record: mostly the incoming class, valued at their
+        # chance of playing times what they would be worth if they did
+        proven = set(pl['pid']) if len(pl) else set()
+        fr = project_freshmen(roster, recruits, season, rating_mu, rating_sd)
+        if len(fr):
+            fr = fr[fr['team'].isin(fbs) & ~fr['pid'].isin(proven)]
+            if len(fr):
+                fa = fr.groupby('team', as_index=False).agg(
+                    freshman_corps=('projected', 'sum'),
+                    freshman_n=('projected', 'size'))
+                g = g.merge(fa, on='team', how='left')
+                players.append(fr.assign(season=season, basis='recruiting'))
         g['team_id'] = g['team'].map(name_to_id)
         out.append(g)
         print(f"  {season}: {len(g)} teams, "
@@ -227,17 +281,23 @@ def main():
     print()
 
     R = pd.concat(out, ignore_index=True)
+    if 'freshman_corps' in R.columns:
+        R['freshman_corps'] = R['freshman_corps'].fillna(0.0)
+        R['projected_corps'] = R['projected_corps'].fillna(0.0)
+        R['projected_total'] = R['projected_corps'] + R['freshman_corps']
     cols = ['corps_share', 'corps_yards', 'best_share', 'best_yards']
-    if 'projected_corps' in R.columns:
-        cols += ['projected_corps', 'projected_best']
+    for c in ('projected_corps', 'projected_best', 'projected_total'):
+        if c in R.columns:
+            cols.append(c)
     for c in cols:
         R[f'{c}_pct'] = R.groupby('season')[c].rank(pct=True)
 
     if players:
         PL = pd.concat(players, ignore_index=True)
         keep = ['season', 'team', 'pid', 'firstName', 'lastName', 'position',
-                'prev_team', 'prev_season', 'prev_yards', 'targets', 'exp',
-                'z_value', 'projected', 'moved']
+                'basis', 'prev_team', 'prev_season', 'prev_yards', 'targets',
+                'exp', 'z_value', 'stars', 'rating', 'p_play', 'if_plays',
+                'projected', 'moved']
         PL = PL[[c for c in keep if c in PL.columns]]
         PL = PL.sort_values(['season', 'projected'], ascending=[True, False])
         ppath = args.out.replace('.csv', '_players.csv')
