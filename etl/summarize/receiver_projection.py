@@ -28,6 +28,31 @@ A team takes the sum of its returning receivers' target share, which answers
 receiver separately, since one dominant target and three interchangeable ones
 are different things.
 
+PLAYER PROJECTION
+
+Each returning receiver is carried forward the same way the quarterback model
+works, on his own record plus the year he is entering:
+
+    next = -0.312 + 0.733*current + 0.156*log(targets)
+                  - 0.073*current*log(targets) - 0.083*experience
+
+Two results in there are worth stating because they contradict what seems
+obvious. Volume does NOT make a season more predictive - fitted separately by
+target count the slope is flat, 0.47 at 25-35 targets against 0.43 at 95+, and
+the correlation between target count and slope is -0.160. A 26-target season
+carries forward about as well as a 106-target one, which is why shrinking thin
+seasons toward the mean does nothing here: value already scales with targets,
+so the weighting is present before anything is shrunk. And experience carries a
+NEGATIVE coefficient, so an older receiver projects slightly worse than a
+younger one who produced the same, the reverse of the quarterback curve.
+
+Holdout, fitted through 2022 and tested on 2023-2025:
+
+    flat slope                          +0.336
+    slope varying with volume           +0.345
+    flat slope + experience             +0.352
+    volume-varying slope + experience   +0.365
+
 Usage:
     python receiver_projection.py --season 2026 --from-season 2017
 """
@@ -38,7 +63,7 @@ import os
 import numpy as np
 import pandas as pd
 
-from qb_projection import first_recruit_id, load
+from qb_projection import first_recruit_id, load  # noqa: F401
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 PRODUCTION = os.path.join(_HERE, 'results', 'receiver_production.csv')
@@ -46,6 +71,56 @@ TEAMS = os.path.join(_HERE, '..', 'collect', 'collect_espn_teams', 'temp',
                      'teams.csv')
 
 MIN_TARGETS = 25
+
+
+def fit_projection(prod, cutoff=2022):
+    """next season's value from this one, volume and experience.
+
+    Reported holdout skill is from a fit through `cutoff` tested on what
+    follows; the returned model is refitted on everything, since the projection
+    itself should use all the evidence available.
+    """
+    from sklearn.linear_model import LinearRegression
+    d = prod.sort_values(['rec_id', 'season']).copy()
+    for c in ('z_value', 'season', 'exp'):
+        d['n_' + c] = d.groupby('rec_id')[c].shift(-1)
+    P = d[d['n_season'] == d['season'] + 1].dropna(
+        subset=['z_value', 'n_z_value', 'targets', 'exp'])
+    P = P.assign(lt=np.log(P['targets']),
+                 zt=P['z_value'] * np.log(P['targets']))
+    X = ['z_value', 'lt', 'zt', 'exp']
+    tr, te = P[P['season'] <= cutoff], P[P['season'] > cutoff]
+    skill = np.nan
+    if len(te) > 30:
+        m0 = LinearRegression().fit(tr[X], tr['n_z_value'])
+        skill = np.corrcoef(m0.predict(te[X]), te['n_z_value'])[0, 1]
+    m = LinearRegression().fit(P[X], P['n_z_value'])
+    return m, skill, len(P)
+
+
+def project_players(prod, roster, recruits, season, model):
+    """Every returning receiver's expected value for `season`."""
+    hist = prod[prod['season'] < season]
+    if hist.empty:
+        return pd.DataFrame()
+    last = (hist.sort_values('season').groupby('rec_id')
+            .agg(prev_team=('team', 'last'), prev_season=('season', 'max'),
+                 z_value=('z_value', 'last'), targets=('targets', 'last'),
+                 prev_yards=('rec_yards', 'last'),
+                 prev_exp=('exp', 'last')).reset_index())
+    r = roster[(roster['season'] == season)
+               & (roster['position'].isin(['WR', 'TE']))].copy()
+    r = r.merge(last, left_on='pid', right_on='rec_id', how='inner')
+    if r.empty:
+        return pd.DataFrame()
+    # a year older than his last recorded season, not than his last on a roster
+    r['exp'] = r['prev_exp'] + (season - r['prev_season'])
+    r = r.dropna(subset=['z_value', 'targets', 'exp'])
+    r['lt'] = np.log(r['targets'])
+    r['zt'] = r['z_value'] * r['lt']
+    r['projected'] = model.predict(r[['z_value', 'lt', 'zt', 'exp']])
+    r['moved'] = r['prev_team'] != r['team']
+    return r
 
 
 def main():
@@ -71,8 +146,36 @@ def main():
     classif = load('classification')
     teams = pd.read_csv(TEAMS)
     name_to_id = dict(zip(teams['location'], teams['id']))
+    id_to_name = {v: k for k, v in name_to_id.items()}
 
-    out = []
+    # value above an average receiver on the same targets, which is what the
+    # projection carries forward
+    lg = prod.groupby('season')['adj_yards_per_target'].mean().rename('lg')
+    prod = prod.merge(lg, on='season', how='left')
+    prod['value'] = prod['targets'] * (prod['adj_yards_per_target'] - prod['lg'])
+    prod['z_value'] = prod.groupby('season')['value'].transform(
+        lambda s: (s - s.mean()) / s.std())
+    prod['team'] = prod['team_id'].map(id_to_name)
+
+    recruits = load('recruits')
+    recruits['id'] = recruits['id'].astype(str)
+    recruits['year'] = pd.to_numeric(recruits['year'], errors='coerce')
+    roster['rid'] = roster['recruitIds'].map(first_recruit_id)
+    link = roster.dropna(subset=['rid']).drop_duplicates('pid')[['pid', 'rid']]
+    prod = prod.merge(link, left_on='rec_id', right_on='pid', how='left').merge(
+        recruits[['id', 'year']].rename(columns={'id': 'rid',
+                                                 'year': 'class_year'}),
+        on='rid', how='left')
+    prod['exp'] = prod['season'] - prod['class_year']
+
+    model, skill, n = fit_projection(prod)
+    print(f"projection fitted on {n:,} consecutive pairs, "
+          f"holdout r = {skill:+.3f}")
+    print(f"  next = {model.intercept_:+.3f} "
+          f"{model.coef_[0]:+.3f}*value {model.coef_[1]:+.3f}*log(targets) "
+          f"{model.coef_[2]:+.3f}*value:log(targets) {model.coef_[3]:+.3f}*exp")
+
+    out, players = [], []
     for season in range(args.from_season, args.season + 1):
         fbs = set(classif.loc[(classif['season'] == season)
                               & (classif['fbs'] == 1), 'team'])
@@ -104,6 +207,18 @@ def main():
             best_yards=('prior_yards', 'max'),
             best_ypt=('prior_ypt', 'max'))
         g['season'] = season
+
+        # each returning receiver carried forward, then summed
+        pl = project_players(prod, roster, recruits, season, model)
+        if len(pl):
+            pl = pl[pl['team'].isin(fbs)]
+            agg = pl.groupby('team', as_index=False).agg(
+                projected_corps=('projected', 'sum'),
+                projected_best=('projected', 'max'),
+                projected_n=('projected', 'size'),
+                arrivals=('moved', 'sum'))
+            g = g.merge(agg, on='team', how='left')
+            players.append(pl.assign(season=season))
         g['team_id'] = g['team'].map(name_to_id)
         out.append(g)
         print(f"  {season}: {len(g)} teams, "
@@ -112,8 +227,22 @@ def main():
     print()
 
     R = pd.concat(out, ignore_index=True)
-    for c in ('corps_share', 'corps_yards', 'best_share', 'best_yards'):
+    cols = ['corps_share', 'corps_yards', 'best_share', 'best_yards']
+    if 'projected_corps' in R.columns:
+        cols += ['projected_corps', 'projected_best']
+    for c in cols:
         R[f'{c}_pct'] = R.groupby('season')[c].rank(pct=True)
+
+    if players:
+        PL = pd.concat(players, ignore_index=True)
+        keep = ['season', 'team', 'pid', 'firstName', 'lastName', 'position',
+                'prev_team', 'prev_season', 'prev_yards', 'targets', 'exp',
+                'z_value', 'projected', 'moved']
+        PL = PL[[c for c in keep if c in PL.columns]]
+        PL = PL.sort_values(['season', 'projected'], ascending=[True, False])
+        ppath = args.out.replace('.csv', '_players.csv')
+        PL.to_csv(ppath, index=False)
+        print(f"wrote {ppath}  ({len(PL)} receiver-seasons projected)")
     R['corps_rank'] = (R.groupby('season')['corps_share']
                        .rank(ascending=False, method='min').astype('Int64'))
     R = R.sort_values(['season', 'corps_rank'])
