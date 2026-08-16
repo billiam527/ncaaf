@@ -163,6 +163,28 @@ ROSTER_TALENT_FILE = os.path.normpath(
                  'roster_talent.csv'))
 ROSTER_TALENT_FEATURES = ['blue_chip_ratio_pct', 'top22_rating_pct']
 
+# Six unit ratings, one per position group, each built from prior-season play
+# and the roster as it stands for the season being predicted. These are not the
+# recruiting-only position groups from talent_by_position.csv, which were tested
+# and added nothing; every column here is production, opponent-adjusted, blended
+# with the recruiting grade of the men actually in that room.
+#
+# They join unlagged, like returning production, because each is already stamped
+# onto the season it describes: the source modules take a played season's rating
+# and shift it forward a year before pairing it with the new roster. Joining the
+# played-season rating instead would hand the model the answer.
+# position_ratings.py --check re-runs the leakage test on every column.
+#
+# Measured against margin over 6,135 games alongside prior-season adjusted EPA,
+# they are worth +0.044 R2 and 0.395 points of MAE - but unevenly. Dropping the
+# front seven costs 0.046 R2 and the line 0.016; quarterback, receiver and
+# secondary cost 0.002 apiece, and the six intercorrelate 0.47 to 0.61 because
+# they all partly encode how good a programme is.
+POSITION_FILE = os.path.normpath(
+    os.path.join(_HERE, '..', '..', 'etl', 'summarize', 'results',
+                 'position_ratings.csv'))
+POSITION_FEATURES = ['pf_qb', 'pf_rb', 'pf_wr', 'pf_ol', 'pf_f7', 'pf_db']
+
 
 def add_returning_production(stats_df: pd.DataFrame,
                              path: str = RETURNING_FILE) -> pd.DataFrame:
@@ -196,7 +218,8 @@ def add_returning_production(stats_df: pd.DataFrame,
     # marginally stronger but stops at 2025, so the rolling class version is
     # used instead - it exists for a season that has not been played.
     for path, wanted in ((TALENT_FILE, TALENT_FEATURES),
-                         (ROSTER_TALENT_FILE, ROSTER_TALENT_FEATURES)):
+                         (ROSTER_TALENT_FILE, ROSTER_TALENT_FEATURES),
+                         (POSITION_FILE, POSITION_FEATURES)):
         if not os.path.exists(path):
             continue
         tal = pd.read_csv(path, low_memory=False)

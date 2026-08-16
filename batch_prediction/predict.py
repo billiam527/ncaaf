@@ -275,8 +275,21 @@ ROSTER_TALENT_FILE = os.path.normpath(os.path.join(
 # things: class points carry the momentum of a strong recent haul, while these
 # reflect who is actually present after transfers and attrition.
 #
-# Position-group ratings were tested too and add nothing beyond these two.
+# The recruiting-only position groups in talent_by_position.csv were tested too
+# and add nothing beyond these two. POSITION_FEATURES below is a different thing
+# and should not be confused with them: those were star ratings by position,
+# these are opponent-adjusted production per unit.
 ROSTER_TALENT_FEATURES = ['blue_chip_ratio_pct', 'top22_rating_pct']
+
+POSITION_FILE = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    '..', 'etl', 'summarize', 'results', 'position_ratings.csv'))
+
+# One rating per unit - quarterback, backfield, receiving corps, offensive line,
+# front seven, secondary - each from prior-season play blended with the
+# recruiting grade of the room as it now stands. Unlagged like returning
+# production, because each is already stamped onto the season it describes.
+POSITION_FEATURES = ['pf_qb', 'pf_rb', 'pf_wr', 'pf_ol', 'pf_f7', 'pf_db']
 
 
 def _merge_by_team_season(stats_df, path, wanted):
@@ -295,8 +308,9 @@ def _merge_by_team_season(stats_df, path, wanted):
 
 def _add_talent(stats_df: pd.DataFrame, path: str = TALENT_FILE) -> pd.DataFrame:
     stats_df = _merge_by_team_season(stats_df, path, TALENT_FEATURES)
-    return _merge_by_team_season(stats_df, ROSTER_TALENT_FILE,
-                                 ROSTER_TALENT_FEATURES)
+    stats_df = _merge_by_team_season(stats_df, ROSTER_TALENT_FILE,
+                                     ROSTER_TALENT_FEATURES)
+    return _merge_by_team_season(stats_df, POSITION_FILE, POSITION_FEATURES)
 
 
 def add_returning_production(stats_df: pd.DataFrame,
@@ -320,7 +334,7 @@ def add_returning_production(stats_df: pd.DataFrame,
     merged = stats_df.merge(ret, on=['team_id', 'season'], how='left')
     merged = _add_talent(merged)
     have = have + [c for c in TALENT_FEATURES + ROSTER_TALENT_FEATURES
-                   if c in merged.columns]
+                   + POSITION_FEATURES if c in merged.columns]
 
     # Fill rather than leave missing. Returning production starts in 2015, and
     # the defensive figure in 2017, but merge_games_and_stats drops any row with
