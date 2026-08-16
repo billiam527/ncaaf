@@ -72,6 +72,22 @@ TEAMS = os.path.join(_HERE, '..', 'collect', 'collect_espn_teams', 'temp',
 
 MIN_TARGETS = 25
 
+# A receiving room is a depth chart, not a roster. The median team fields three
+# qualified receivers and one tight end, the top three take 85% of the targets
+# and the top four take 95%, so counting a sixth body adds noise rather than
+# offence. Trimming also tracks the team's passing production slightly better
+# than counting everyone: against adjusted EPA per pass, top 3 WR + 1 TE
+# correlates 0.712 and top 4 WR + 2 TE 0.704, against 0.706 for the full room.
+# Four and two is used - it holds 95% of the targets and is more forgiving of a
+# team that spreads the ball unusually wide.
+ROOM_WR, ROOM_TE = 4, 2
+
+# Running backs catch passes but are not receivers: 8.9 yards a catch against a
+# receiver's 13.6, out of the backfield rather than a route tree. They and the
+# stray quarterbacks, linemen and defensive backs picked up on trick plays are
+# excluded - 13% of the rows before filtering.
+ROOM_POSITIONS = ('WR', 'TE')
+
 
 def fit_projection(prod, cutoff=2022):
     """next season's value from this one, volume and experience.
@@ -134,6 +150,21 @@ def project_freshmen(roster, recruits, season, rating_mu, rating_sd):
     r['if_plays'] = FRESH_A + FRESH_B * rz
     r['projected'] = r['p_play'] * r['if_plays']
     return r
+
+
+def trim_to_room(df, value_col, pos_col='position'):
+    """Keep only the depth chart: the best few receivers and tight ends.
+
+    Ranked on projected value, so the room is who a team expects to throw to,
+    not who happens to be listed.
+    """
+    d = df[df[pos_col].isin(ROOM_POSITIONS)].copy()
+    if d.empty:
+        return d
+    d['_rk'] = (d.groupby(['team', pos_col])[value_col]
+                .rank(ascending=False, method='first'))
+    limit = d[pos_col].map({'WR': ROOM_WR, 'TE': ROOM_TE})
+    return d[d['_rk'] <= limit].drop(columns=['_rk'])
 
 
 def project_players(prod, roster, recruits, season, model):
@@ -263,30 +294,38 @@ def main():
             best_ypt=('prior_ypt', 'max'))
         g['season'] = season
 
-        # each returning receiver carried forward, then summed
+        # every returning receiver and every incoming one, projected, then cut
+        # to a depth chart. Both sources compete for the same places: a
+        # five-star freshman can displace a marginal returner, which is what
+        # actually happens.
         pl = project_players(prod, roster, recruits, season, model)
+        pl = pl[pl['team'].isin(fbs)] if len(pl) else pl
         if len(pl):
-            pl = pl[pl['team'].isin(fbs)]
-            agg = pl.groupby('team', as_index=False).agg(
-                projected_corps=('projected', 'sum'),
-                projected_best=('projected', 'max'),
-                projected_n=('projected', 'size'),
-                arrivals=('moved', 'sum'))
-            g = g.merge(agg, on='team', how='left')
-            players.append(pl.assign(season=season, basis='record'))
-
-        # receivers with no record: mostly the incoming class, valued at their
-        # chance of playing times what they would be worth if they did
+            pl = pl.assign(basis='record')
         proven = set(pl['pid']) if len(pl) else set()
         fr = project_freshmen(roster, recruits, season, rating_mu, rating_sd)
         if len(fr):
             fr = fr[fr['team'].isin(fbs) & ~fr['pid'].isin(proven)]
             if len(fr):
-                fa = fr.groupby('team', as_index=False).agg(
-                    freshman_corps=('projected', 'sum'),
-                    freshman_n=('projected', 'size'))
-                g = g.merge(fa, on='team', how='left')
-                players.append(fr.assign(season=season, basis='recruiting'))
+                fr = fr.assign(basis='recruiting', moved=False)
+        both = pd.concat([x for x in (pl, fr) if len(x)], ignore_index=True) \
+            if (len(pl) or len(fr)) else pd.DataFrame()
+        if len(both):
+            room = trim_to_room(both, 'projected')
+            if len(room):
+                agg = room.groupby('team', as_index=False).agg(
+                    projected_corps=('projected', 'sum'),
+                    projected_best=('projected', 'max'),
+                    projected_n=('projected', 'size'),
+                    arrivals=('moved', 'sum'))
+                by = (room.groupby(['team', 'basis'])['projected'].sum()
+                      .unstack(fill_value=0.0).reset_index())
+                for c, nm in (('record', 'room_record'),
+                              ('recruiting', 'room_freshman')):
+                    agg[nm] = agg['team'].map(
+                        dict(zip(by['team'], by[c]))) if c in by.columns else 0.0
+                g = g.merge(agg, on='team', how='left')
+                players.append(room.assign(season=season, in_room=True))
         g['team_id'] = g['team'].map(name_to_id)
         out.append(g)
         print(f"  {season}: {len(g)} teams, "
@@ -295,10 +334,11 @@ def main():
     print()
 
     R = pd.concat(out, ignore_index=True)
-    if 'freshman_corps' in R.columns:
-        R['freshman_corps'] = R['freshman_corps'].fillna(0.0)
-        R['projected_corps'] = R['projected_corps'].fillna(0.0)
-        R['projected_total'] = R['projected_corps'] + R['freshman_corps']
+    for c in ('projected_corps', 'room_record', 'room_freshman'):
+        if c in R.columns:
+            R[c] = R[c].fillna(0.0)
+    if 'projected_corps' in R.columns:
+        R['projected_total'] = R['projected_corps']
     cols = ['corps_share', 'corps_yards', 'best_share', 'best_yards']
     for c in ('projected_corps', 'projected_best', 'projected_total'):
         if c in R.columns:
