@@ -198,7 +198,17 @@ def opponent_adjust(plays, g, alpha=ALPHA):
     for season, sd in p.groupby('season'):
         cell = sd.groupby(['rec_id', 'opponent_id'], as_index=False).agg(
             n=('epa', 'size'), ypt=('rec_yards', 'mean'),
-            cr=('caught', 'mean'))
+            cr=('caught', 'mean'), ept=('epa', 'mean'))
+        # EPA per catch conditions on the ball being caught, so it needs its
+        # own denominator rather than the target count
+        caught = sd[sd['caught']]
+        if len(caught):
+            epc = (caught.groupby(['rec_id', 'opponent_id'], as_index=False)
+                   .agg(epc=('epa', 'mean'), n_c=('epa', 'size')))
+            cell = cell.merge(epc, on=['rec_id', 'opponent_id'], how='left')
+        else:
+            cell['epc'] = np.nan
+            cell['n_c'] = 0
         if len(cell) < 200:
             continue
         recs = pd.Index(sorted(cell['rec_id'].unique()))
@@ -215,7 +225,8 @@ def opponent_adjust(plays, g, alpha=ALPHA):
         w = cell['n'].to_numpy(float)
         res = {'rec_id': recs, 'season': int(season)}
         for col, name in (('ypt', 'adj_yards_per_target'),
-                          ('cr', 'adj_catch_rate')):
+                          ('cr', 'adj_catch_rate'),
+                          ('ept', 'adj_epa_per_target')):
             m = Ridge(alpha=alpha, fit_intercept=True).fit(
                 X, cell[col].to_numpy(float), sample_weight=w)
             res[name] = m.intercept_ + m.coef_[:len(recs)]
@@ -225,6 +236,27 @@ def opponent_adjust(plays, g, alpha=ALPHA):
                          .groupby('rec_id')
                          .apply(lambda x: np.average(x['_d'], weights=x['n'])))
                 res['defense_faced'] = faced.reindex(recs).to_numpy()
+
+        # per-catch is fitted only over cells where something was caught, and
+        # weighted by catches rather than targets
+        cc = cell.dropna(subset=['epc'])
+        cc = cc[cc['n_c'] > 0]
+        if len(cc) > 50:
+            ri2 = cc['rec_id'].map({v: i for i, v in enumerate(recs)}).to_numpy()
+            di2 = cc['opponent_id'].map(
+                {v: i for i, v in enumerate(defs)}).to_numpy()
+            n2 = len(cc)
+            rows2 = np.arange(n2)
+            X2 = sparse.hstack([
+                sparse.csr_matrix((np.ones(n2), (rows2, ri2)),
+                                  shape=(n2, len(recs))),
+                sparse.csr_matrix((np.ones(n2), (rows2, di2)),
+                                  shape=(n2, len(defs))),
+            ]).tocsr()
+            m = Ridge(alpha=alpha, fit_intercept=True).fit(
+                X2, cc['epc'].to_numpy(float),
+                sample_weight=cc['n_c'].to_numpy(float))
+            res['adj_epa_per_catch'] = m.intercept_ + m.coef_[:len(recs)]
         out.append(pd.DataFrame(res))
     if not out:
         return g
@@ -296,17 +328,23 @@ def main():
         team_targets=('epa', 'size'),
         team_yards=('rec_yards', 'sum')).reset_index()
 
+    d['epa_caught'] = np.where(d['caught'], d['epa'].fillna(0.0), 0.0)
     g = d.groupby(['rec_id', 'rec_who', 'rec_pos', 'team_id', 'season'],
                   as_index=False).agg(
         games=('game_id', 'nunique'), targets=('epa', 'size'),
         receptions=('caught', 'sum'), rec_yards=('rec_yards', 'sum'),
-        touchdowns=('td', 'sum'), epa=('epa', 'sum'))
+        touchdowns=('td', 'sum'), epa=('epa', 'sum'),
+        epa_caught=('epa_caught', 'sum'))
     g = g.merge(team, on=['team_id', 'season'], how='left')
 
     g['catch_rate'] = g['receptions'] / g['targets']
     g['yards_per_target'] = g['rec_yards'] / g['targets']
     g['yards_per_catch'] = g['rec_yards'] / g['receptions'].replace(0, np.nan)
     g['epa_per_target'] = g['epa'] / g['targets']
+    # EPA on the catches only. A different question to per-target: it asks what
+    # he does with the ball rather than what a throw at him is worth, so it
+    # ignores the incompletions that per-target counts against him.
+    g['epa_per_catch'] = g['epa_caught'] / g['receptions'].replace(0, np.nan)
     # scoring on few catches marks a red-zone target rather than a volume one
     g['td_rate'] = g['touchdowns'] / g['receptions'].replace(0, np.nan)
     # share of what the offence threw, and of the yards it gained doing so -
@@ -329,8 +367,10 @@ def main():
     g = g.merge(others, on=['team_id', 'season'], how='left')
 
     for c in ('rec_yards', 'receptions', 'touchdowns', 'target_share',
-              'yard_share', 'epa', 'adj_yards_per_target'):
-        g[f'{c}_pct'] = g.groupby('season')[c].rank(pct=True)
+              'yard_share', 'epa', 'adj_yards_per_target',
+              'epa_per_target', 'epa_per_catch'):
+        if c in g.columns:
+            g[f'{c}_pct'] = g.groupby('season')[c].rank(pct=True)
     g['rank_yards'] = (g.groupby('season')['rec_yards']
                        .rank(ascending=False, method='min').astype('Int64'))
     g = g.sort_values(['season', 'rank_yards'])
@@ -341,7 +381,9 @@ def main():
           f"{int(g.season.min())}-{int(g.season.max())})")
     cols = ['targets', 'receptions', 'rec_yards', 'touchdowns', 'catch_rate',
             'td_rate', 'target_share', 'yards_per_catch',
-            'yards_per_target', 'adj_yards_per_target', 'defense_faced']
+            'yards_per_target', 'adj_yards_per_target',
+            'epa_per_target', 'adj_epa_per_target',
+            'epa_per_catch', 'adj_epa_per_catch', 'defense_faced']
     print(g[[c for c in cols if c in g.columns]]
           .describe().round(3).to_string())
 
