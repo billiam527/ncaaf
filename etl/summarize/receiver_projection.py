@@ -102,6 +102,11 @@ def fit_projection(prod, cutoff=2022):
 # the 2014-2021 classes, whose careers are finished. This is the larger half of
 # the uncertainty about a freshman: whether he plays at all, not how well.
 PLAY_RATE = {5: 0.84, 4: 0.47, 3: 0.18, 2: 0.06}
+# A tight end reaches a qualifying season less often than a wide receiver
+# holding the recruiting grade fixed - 39% against 50% at four stars, 11%
+# against 20% at three - so the rate is scaled rather than shared. Weighted
+# across bands on the finished 2014-2021 classes the ratio is 0.64.
+TE_PLAY_FACTOR = 0.64
 # first qualifying season from the recruiting grade alone, holdout r = +0.174
 FRESH_A, FRESH_B = -0.042, 0.187
 
@@ -124,6 +129,7 @@ def project_freshmen(roster, recruits, season, rating_mu, rating_sd):
     if r.empty:
         return pd.DataFrame()
     r['p_play'] = r['stars'].astype(int).map(PLAY_RATE).fillna(0.06)
+    r.loc[r['position'] == 'TE', 'p_play'] *= TE_PLAY_FACTOR
     rz = (r['rating'] - rating_mu) / rating_sd
     r['if_plays'] = FRESH_A + FRESH_B * rz
     r['projected'] = r['p_play'] * r['if_plays']
@@ -185,7 +191,15 @@ def main():
     lg = prod.groupby('season')['adj_yards_per_target'].mean().rename('lg')
     prod = prod.merge(lg, on='season', how='left')
     prod['value'] = prod['targets'] * (prod['adj_yards_per_target'] - prod['lg'])
-    prod['z_value'] = prod.groupby('season')['value'].transform(
+    # Standardised within season AND position. A tight end does a smaller job:
+    # 41.6 targets against 54.9, a 12.7% target share against 16.5%, 12.0 yards
+    # a catch against 13.6. On a shared scale they are 13% of the population and
+    # 0% of the top hundred, which says nothing about tight ends and everything
+    # about the comparison. They are not a different kind of player to model,
+    # though - fitted separately the slope is +0.397 against +0.392 for wide
+    # receivers and stability +0.363 against +0.343 - so the same projection
+    # runs on both and only the yardstick changes.
+    prod['z_value'] = prod.groupby(['season', 'rec_pos'])['value'].transform(
         lambda s: (s - s.mean()) / s.std())
     prod['team'] = prod['team_id'].map(id_to_name)
 
