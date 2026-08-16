@@ -268,18 +268,17 @@ ROSTER_TALENT_FILE = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     '..', 'etl', 'summarize', 'results', 'roster_talent.csv'))
 
-# Talent of the players on the roster, as opposed to the talent signed. These
-# do not replace the class-points measure - either one alone is worse than it -
-# but alongside it they are worth a further -0.059 MAE (t=-2.76) and take
-# correlation with market lines from +0.757 to +0.764. They measure different
-# things: class points carry the momentum of a strong recent haul, while these
-# reflect who is actually present after transfers and attrition.
+# Talent of the players on the roster, as opposed to the talent signed. Worth
+# -0.059 MAE (t=-2.76) while it was the only read on who is actually present
+# after transfers and attrition. POSITION_FEATURES below now does that job per
+# position, and dropping these two measures -0.007 MAE (t=-0.51) with market
+# correlation unchanged - so they are out, and a per-unit rating can be adjusted
+# for an injury in a way a roster-wide blue-chip ratio never could.
 #
-# The recruiting-only position groups in talent_by_position.csv were tested too
-# and add nothing beyond these two. POSITION_FEATURES below is a different thing
-# and should not be confused with them: those were star ratings by position,
-# these are opponent-adjusted production per unit.
-ROSTER_TALENT_FEATURES = ['blue_chip_ratio_pct', 'top22_rating_pct']
+# The recruiting-only position groups in talent_by_position.csv were tested
+# separately and add nothing. POSITION_FEATURES is not those: those were star
+# ratings by position, these are opponent-adjusted production per unit.
+ROSTER_TALENT_FEATURES = []  # was ['blue_chip_ratio_pct', 'top22_rating_pct']
 
 POSITION_FILE = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)),

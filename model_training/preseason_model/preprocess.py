@@ -153,15 +153,16 @@ TALENT_FILE = os.path.normpath(
                  'team_talent.csv'))
 TALENT_FEATURES = ['talent_roll_pct']
 
-# Talent present on the roster, from roster.recruitIds joined to per-recruit
-# ratings. Worth a further -0.059 MAE (t=-2.76) alongside the class-points
-# measure; neither replaces the other, because one carries the momentum of a
-# strong recent haul and the other reflects who is actually there after
-# transfers and attrition.
+# Talent present on the roster - blue-chip ratio and top-22 rating - was worth
+# -0.059 MAE (t=-2.76) when it was the only measure of who is actually on the
+# roster rather than who was signed. The unit ratings below now cover that, and
+# cover it per position, so these two have been dropped: removing them measures
+# -0.007 MAE (t=-0.51) and leaves correlation with market lines unchanged. They
+# are kept here as a named constant only so the file records what was tested.
 ROSTER_TALENT_FILE = os.path.normpath(
     os.path.join(_HERE, '..', '..', 'etl', 'summarize', 'results',
                  'roster_talent.csv'))
-ROSTER_TALENT_FEATURES = ['blue_chip_ratio_pct', 'top22_rating_pct']
+ROSTER_TALENT_FEATURES = []  # was ['blue_chip_ratio_pct', 'top22_rating_pct']
 
 # Six unit ratings, one per position group, each built from prior-season play
 # and the roster as it stands for the season being predicted. These are not the
@@ -174,6 +175,11 @@ ROSTER_TALENT_FEATURES = ['blue_chip_ratio_pct', 'top22_rating_pct']
 # and shift it forward a year before pairing it with the new roster. Joining the
 # played-season rating instead would hand the model the answer.
 # position_ratings.py --check re-runs the leakage test on every column.
+#
+# They also replaced the roster-talent pair above, which they made redundant.
+# Returning production they did NOT replace: dropping it costs +0.042 MAE
+# (t=+2.99) even with these present, because ret_TE_starter and the quality-
+# weighted ret_good / ret_bad cover ground no unit rating does.
 #
 # Measured against margin over 6,135 games alongside prior-season adjusted EPA,
 # they are worth +0.044 R2 and 0.395 points of MAE - but unevenly. Dropping the
