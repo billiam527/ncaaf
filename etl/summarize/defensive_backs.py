@@ -78,12 +78,23 @@ def first_recruit_id(value):
     return str(parsed[0]) if isinstance(parsed, list) and parsed else None
 
 
-def room_members(size=ROOM_SIZE):
+def room_members(size=ROOM_SIZE, rated_only=False):
     """The five men, one row each, with their recruiting grade.
 
     Five because nickel is the base defence in this era, not four. As everywhere
     else on this side of the ball there are no snap counts, so this cannot know
     who starts.
+
+    Two consumers want different things from this, and serving both with one
+    selection measurably costs:
+
+      rated_only=False   who is on the field, for the coverage carry. An
+                         unrated man's saved yards are as real as anyone's.
+      rated_only=True    the best five RATED men, for the recruiting grade.
+                         Letting unrated men take places here computes the mean
+                         over three or four grades instead of five and makes it
+                         noisier - worth -0.024 on the predictive criterion,
+                         more than a standard error, for no gain against Steele.
     """
     roster = pd.read_csv(os.path.join(PLAYER_DIR, 'cfbd_roster.csv'),
                          low_memory=False)
@@ -103,7 +114,16 @@ def room_members(size=ROOM_SIZE):
         r['team_id'] = r['team_id'].fillna(
             pd.to_numeric(r['teamId'], errors='coerce'))
     r['season'] = pd.to_numeric(r['season'], errors='coerce')
-    r = r.dropna(subset=['team_id', 'season', 'rating'])
+    # NOT dropna on rating. Membership and grading are two different jobs and
+    # this line used to do both at once: a man with no recruiting record was
+    # dropped before selection, so no room could hold him whatever he did.
+    # 35% of defensive backs on a 2026 roster have no composite, and 22% of
+    # those with 30 or more tackles - Miami's Zechariah Poyser, second on that
+    # team in tackles and carrying a full share of its saved yards, lost his
+    # place to men with 16 and 11. The burden falls hardest on G5 rosters,
+    # whose players are less likely to be in the 247 database at all, so the
+    # old rule quietly thinned exactly the rooms it should have been reading.
+    r = r.dropna(subset=['team_id', 'season'])
     r['team_id'] = r['team_id'].astype(int)
     r['season'] = r['season'].astype(int)
     r['pid'] = r['id'].astype(str)
@@ -116,9 +136,10 @@ def room_members(size=ROOM_SIZE):
     # production is not.
     #
     # Prior-season production decides the order among players who have any, and
-    # the recruiting grade orders the rest. The room's rating is still the mean
-    # composite of whoever is picked, so the scale is unchanged - what changes
-    # is which five are in it.
+    # the recruiting grade orders the rest - unrated men sort last within a tie,
+    # so a graded freshman still outranks an ungraded one when neither played.
+    if rated_only:
+        r = r[r['rating'].notna()]
     r = r.merge(prior_production(), on=['pid', 'season'], how='left')
     r['played'] = r['prod_events'].notna().astype(int)
     r['prod_events'] = r['prod_events'].fillna(0.0)
@@ -128,13 +149,23 @@ def room_members(size=ROOM_SIZE):
 
 
 def secondary_room(size=ROOM_SIZE):
-    """Mean recruiting grade of the top five defensive backs."""
-    top = room_members(size)
+    """Mean recruiting grade of the top five defensive backs.
+
+    Selected among rated players only, so this is a mean of five grades rather
+    than of however many of the five happen to be in the 247 database. The men
+    with no grade are not being judged badly here - they are simply graded
+    somewhere else, by their coverage carry, which is the number that knows
+    what they actually did.
+    """
+    top = room_members(size, rated_only=True)
     out = top.groupby(['team_id', 'season'], as_index=False).agg(
-        DB_rating_top=('rating', 'mean'), DB_n=('rating', 'size'),
+        DB_rating_top=('rating', 'mean'),      # skips NaN
+        DB_n=('rating', 'count'),              # count is rated members only
+        DB_size=('rating', 'size'),
         DB_played=('played', 'sum'))
+    out['DB_unrated'] = out['DB_size'] - out['DB_n']
     out.loc[out['DB_n'] < MIN_GRADED, 'DB_rating_top'] = np.nan
-    return out
+    return out.drop(columns=['DB_size'])
 
 
 def coverage_carry(size=ROOM_SIZE, path=None):
