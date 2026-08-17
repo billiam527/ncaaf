@@ -67,7 +67,11 @@ COVER_PARTS = ('adjusted_epa_per_pass_def', 'adjusted_pass_success_def',
 BALL_PARTS = ('adj_interception_rate', 'adj_pass_defensed_rate',
               'adj_fumble_rate')
 
-P4 = {'SEC', 'Big Ten', 'Big 12', 'ACC', 'Pac-12'}
+# The tier rule lives in tiers.py, not in a frozen set here. A copy of that set
+# in this file read Notre Dame as group-of-five and the 2026 Pac-12 as power.
+from tiers import power_series  # noqa: E402
+
+TEAM_NAME = {}          # filled in main(), used by the tier rule
 
 
 def first_recruit_id(value):
@@ -218,7 +222,17 @@ def coverage_carry(size=ROOM_SIZE, path=None):
 CAREER_TKL_SHARES = (0.0, 0.15, 0.30)
 
 
-def career_production(path=None, tkl_share=0.0):
+def career_production(path=None, tkl_share=0.0, g5_discount=0.0):
+    # g5_discount subtracts a fixed number of ball events from every season a
+    # man spent outside a power conference. The size is not a guess: 53 players
+    # who moved from G5 to power lost 1.08 ball events while 936 who stayed in
+    # G5 gained 0.71, a difference of -1.79 with se 0.58, t -3.07. Against a G5
+    # mean near 4.4 that is a 40% overstatement. Conventional schedule strength
+    # finds none of this - average opponent pass EPA correlates +0.008 with
+    # player ball events - so whatever the tier line captures, it is not the
+    # quality of the offences faced. Partly it is role: the same movers lose
+    # 7.4 tackles, so they are playing less on deeper rosters. Both readings
+    # argue for the discount on a cross-team measure; neither tells us the mix.
     """Career production, judged against a player's own class.
 
     Reading only last season throws away that a man did it twice, and comparing
@@ -273,6 +287,16 @@ def career_production(path=None, tkl_share=0.0):
     d['pid'] = d['pid'].astype(str)
     d['ball'] = d['pd_best'].fillna(0) + 2 * d['intercept'].fillna(0)
     d['tkl'] = d['tot_box'].fillna(0)
+    if g5_discount:
+        T = pd.read_csv(TALENT, low_memory=False)[
+            ['team_id', 'season', 'conference']].drop_duplicates(
+            ['team_id', 'season'])
+        T['team'] = T['team_id'].map(TEAM_NAME)
+        T['power'] = power_series(T)
+        d = d.merge(T[['team_id', 'season', 'power']],
+                    on=['team_id', 'season'], how='left')
+        d['ball'] = np.where(d['power'].fillna(False).astype(bool), d['ball'],
+                             np.maximum(d['ball'] - g5_discount, 0.0))
     out = d.groupby(['pid', 'season'], as_index=False)[['ball', 'tkl']].sum()
     out = out.sort_values(['pid', 'season'])
     g0 = out.groupby('pid')
@@ -434,6 +458,10 @@ def main():
         _HERE, 'results', 'defensive_backs.csv'))
     args = ap.parse_args()
 
+    global TEAM_NAME
+    _t = pd.read_csv(TEAMS)
+    TEAM_NAME = dict(zip(_t['id'], _t['location']))
+
     H = pd.read_csv(HAVOC, low_memory=False)
     S = pd.read_csv(SEASONS, low_memory=False)
     T = pd.read_csv(TALENT, low_memory=False)
@@ -516,6 +544,10 @@ def main():
         y['z_cov_carry'] = y['z_cov_carry'].fillna(0.0)
         for i in careers:
             y[f'z_career_{i}'] = y[f'z_career_{i}'].fillna(0.0)
+        # the tier rule needs the team name, not just the id - Notre Dame is
+        # told apart from the other independents by name
+        y['team'] = y['team_id'].map(TEAM_NAME)
+        y['power'] = power_series(y)
         return y
 
     # Five shares now, so the loop is ~300,000 evaluations. Doing that with a
@@ -534,7 +566,7 @@ def main():
             car={i: y[f'z_career_{i}'].to_numpy(float) for i in careers},
             rec=y['zrec'].to_numpy(float),
             tgt=y[TGT].to_numpy(float),
-            p4=y['conference'].isin(P4).to_numpy())
+            p4=y['power'].to_numpy(bool))
         cache[cs] = a
         return a
 

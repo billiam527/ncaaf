@@ -79,7 +79,8 @@ RUSH_PARTS = ('adjusted_epa_per_rush_def', 'adjusted_rush_success_def',
               'adjusted_explosive_rush_rate_def')
 
 MIN_COVERAGE = 0.5
-P4 = {'SEC', 'Big Ten', 'Big 12', 'ACC', 'Pac-12'}
+# The tier rule lives in tiers.py, not in a frozen set here.
+from tiers import tier_series  # noqa: E402
 
 
 def first_recruit_id(value):
@@ -260,9 +261,11 @@ def main():
     lag['season'] -= 1
     lag = lag.rename(columns={TGT: 'next_def'})
     ev = d.merge(lag, on=['team_id', 'season'], how='inner')
-    ev['tier'] = np.where(ev.get('conference',
-                                 pd.Series(index=ev.index)).isin(P4),
-                          'P4', 'G5')
+    # the tier rule needs the team name as well as the conference: Notre Dame
+    # is an Independent and the frozen set here used to read it as G5
+    _tm = pd.read_csv(TEAMS)
+    ev['team'] = ev['team_id'].map(dict(zip(_tm['id'], _tm['location'])))
+    ev['tier'] = tier_series(ev)
 
     def score(hs, rc):
         b = blend(ev, wh, wr, hs, rc).dropna(subset=['f7_rating', 'next_def'])

@@ -252,10 +252,17 @@ def main():
     # tier a team is in. Within P4 alone, recruiting predicts next year's
     # offense at 0.397 and blocking at 0.432; pooled, recruiting appeared to
     # win 0.571 to 0.493. Scoring inside each tier removes that shortcut.
-    P4 = {'SEC', 'Big Ten', 'Big 12', 'ACC', 'Pac-12'}
+    # The tier rule lives in tiers.py. A frozen set here read Notre Dame as G5
+    # and the rebuilt 2026 Pac-12 as power, which is the shortcut this scoring
+    # exists to close.
+    import sys as _s
+    _s.path.insert(0, _HERE)
+    from tiers import tier_series
     ev = ev.copy()
-    ev['tier'] = np.where(ev.get('conference', pd.Series(index=ev.index))
-                          .isin(P4), 'P4', 'G5')
+    if 'team' not in ev.columns:
+        _tm = pd.read_csv(TEAMS)
+        ev['team'] = ev['team_id'].map(dict(zip(_tm['id'], _tm['location'])))
+    ev['tier'] = tier_series(ev)
 
     def score(rs, rc):
         b = blend(ev, wr, wp, rs, rc).dropna(subset=['ol_rating', 'next_off'])
