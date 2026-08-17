@@ -461,6 +461,62 @@ def predict_games(scaler,
     return predict_file, predictions
 
 
+TEAMS_FILE = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    '..', 'etl', 'collect', 'collect_espn_teams', 'temp', 'teams.csv'))
+
+SPREAD_FILE = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    '..', 'etl', 'collect', 'collect_cfbd_games', 'cfbd_spread_data.csv'))
+
+
+def add_team_names(df):
+    """Readable names beside the ESPN ids, so the file can be read directly."""
+    if not os.path.exists(TEAMS_FILE):
+        return df
+    t = pd.read_csv(TEAMS_FILE)
+    name = dict(zip(t['id'], t['location']))
+    for side in ('home', 'away'):
+        col = f'{side}_team_id'
+        if col in df.columns:
+            df[f'{side}_team'] = df[col].map(name)
+    return df
+
+
+def add_market_line(df):
+    """Join the closing market line and the model's edge against it.
+
+    CFBD stores the spread from the home team's point of view with a negative
+    number meaning the home team is favoured, which is the opposite sign to the
+    margin this model predicts. It is negated here so both columns mean the same
+    thing: points the home team is expected to win by.
+
+    Several books price the same game, so the median across providers is used
+    rather than any one of them. n_books records how many agreed to that median,
+    because a line carried by a single book is worth less than a consensus.
+    """
+    if not os.path.exists(SPREAD_FILE) or 'id' not in df.columns:
+        return df
+    s = pd.read_csv(SPREAD_FILE, low_memory=False)
+    if 'game_id' not in s.columns or 'spread' not in s.columns:
+        return df
+    s['spread'] = pd.to_numeric(s['spread'], errors='coerce')
+    s = s.dropna(subset=['spread', 'game_id'])
+    agg = s.groupby('game_id').agg(market_spread=('spread', 'median'),
+                                   n_books=('spread', 'size')).reset_index()
+    agg['market_margin'] = -agg['market_spread']
+    df = df.merge(agg, left_on='id', right_on='game_id', how='left')
+    df = df.drop(columns=['game_id'], errors='ignore')
+
+    # the model's number minus the market's, positive meaning the model likes
+    # the home team more than the book does
+    model = df['preseason_model_preds']
+    if 'in_season_model_preds' in df.columns:
+        model = df['in_season_model_preds'].fillna(model)
+    df['edge'] = model - df['market_margin']
+    return df
+
+
 # Take in selected model from bash file selection
 def parse_args():
 
@@ -562,10 +618,23 @@ if __name__ == '__main__':
             full_df, non_pred_games, neutral_adj,
             columns=['preseason_model_preds', 'in_season_model_preds'])
 
-        cols = ['id', 'away_team_id', 'home_team_id', 'date', 'week', 'short_name',
-                'neutral_site', 'preseason_model_preds', 'in_season_model_preds']
+        full_df = add_team_names(full_df)
+        full_df = add_market_line(full_df)
+
+        cols = ['id', 'date', 'week', 'short_name', 'away_team', 'home_team',
+                'away_team_id', 'home_team_id', 'neutral_site',
+                'preseason_model_preds', 'in_season_model_preds',
+                'market_margin', 'market_spread', 'edge', 'n_books']
         full_df = full_df[[c for c in cols if c in full_df.columns]]
         full_df.to_csv(predict_dir + 'predictions.csv')
+        if 'market_margin' in full_df.columns:
+            have = full_df['market_margin'].notna().sum()
+            print(f"  market line joined for {have} of {len(full_df)} games")
+            e = full_df['edge'].dropna()
+            if len(e):
+                print(f"  edge vs the line: mean {e.mean():+.2f}, "
+                      f"mean absolute {e.abs().mean():.2f}, "
+                      f"largest {e.abs().max():.1f}")
     else:
         # Build the historical per-week files that model_blender.py reads to fit
         # its per-week blend weights.
