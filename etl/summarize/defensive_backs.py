@@ -200,14 +200,58 @@ def coverage_carry(size=ROOM_SIZE, path=None):
         cov_n=('cov_yards_value', lambda s: int((s != 0).sum())))
 
 
-def career_production(path=None):
-    """Career ball production, judged against a player's own class.
+# Measured at 0.00 / 0.15 / 0.30 / 0.45 / 0.60 and monotonically decreasing -
+# 0.326, 0.326, 0.325, 0.324, 0.323 - so career tackles buy nothing at team
+# level. The grid is kept short enough to notice if that ever changes.
+#
+# I do not have a verified reason why. The obvious one - that a room's tackle
+# total barely varies between teams - is wrong on checking: across 2026 rooms
+# the coefficient of variation is 0.54 for tackles against 0.53 for ball
+# events, effectively identical. A likelier story is that tackles carry two
+# opposed signals at team level, since a defence on the field more often
+# records more of them, but that is untested and stated as a guess.
+#
+# What the result does NOT say is that tackles are uninformative about a
+# PLAYER. They plainly are - carrying them moves Ty Benefield from 36th to 7th
+# on a player list and takes safeties from 2 of the top 25 to 4. This fit
+# scores team-seasons and cannot adjudicate that question either way.
+CAREER_TKL_SHARES = (0.0, 0.15, 0.30)
+
+
+def career_production(path=None, tkl_share=0.0):
+    """Career production, judged against a player's own class.
 
     Reading only last season throws away that a man did it twice, and comparing
     a junior to seniors understates him - seniors have simply had longer to
-    accumulate. So this sums passes defensed and interceptions over every prior
-    season, then standardises WITHIN class year and season, so a junior is
-    measured against juniors.
+    accumulate. So this sums production over every prior season, then
+    standardises WITHIN class year and season, so a junior is measured against
+    juniors.
+
+    TWO KINDS OF PRODUCTION, AND WHY THERE IS NO POSITION TERM
+
+    Ball events - passes defensed and interceptions - are a corner's job.
+    Counting only those buries safeties: they are 34% of the population but
+    take 8% of the top 25, averaging 48 tackles against a corner's 37 and one
+    fewer ball event. Boise State's Ty Benefield had 105 tackles in 2025 and
+    scored nothing for any of them.
+
+    The obvious repair is to standardise within position, and it is a trap.
+    The CB/S label is a REPORTING CONVENTION, not a fact about the player: 48
+    programs label every defensive back 'DB' and 48 label none of them that
+    way, and a man's label never changes across his career (100% consistent
+    over 1,590 checks, 0% of ambiguous cases recoverable from his own history).
+    Adjusting only where the label exists would treat Notre Dame's secondary
+    differently from Miami's for reasons of paperwork, in a rating whose whole
+    job is comparing teams.
+
+    So no position term. Instead both kinds of production are carried, each
+    standardised in its own right, and tkl_share - how much of the blend is
+    tackles - is chosen by the same fit that chooses everything else. A safety
+    earns through tackles and a corner through ball events, and no label is
+    needed. The cost is that tackles are partly a playing-time proxy, so the
+    two cases pull against each other: weight them and Benefield rises while
+    Moore, who had 31 tackles because nobody threw at him, falls. The fit
+    adjudicates rather than me.
 
     What that surfaces: Notre Dame's Leonard Moore enters 2026 first of 168
     juniors at +4.79, further clear of second than second is of fifteenth.
@@ -228,9 +272,12 @@ def career_production(path=None):
     d = d[d['group'] == 'DB'].copy()
     d['pid'] = d['pid'].astype(str)
     d['ball'] = d['pd_best'].fillna(0) + 2 * d['intercept'].fillna(0)
-    out = d.groupby(['pid', 'season'], as_index=False)['ball'].sum()
+    d['tkl'] = d['tot_box'].fillna(0)
+    out = d.groupby(['pid', 'season'], as_index=False)[['ball', 'tkl']].sum()
     out = out.sort_values(['pid', 'season'])
-    out['car_ball'] = out.groupby('pid')['ball'].cumsum()
+    g0 = out.groupby('pid')
+    out['car_ball'] = g0['ball'].cumsum()
+    out['car_tkl'] = g0['tkl'].cumsum()
     out['season'] += 1
 
     try:
@@ -243,19 +290,30 @@ def career_production(path=None):
         out['class_yr'] = np.nan
     # within class where we know it, within season where we do not
     key = ['season', 'class_yr'] if out['class_yr'].notna().any() else ['season']
-    g = out.groupby(key, dropna=False)['car_ball']
-    out['z_car'] = ((out['car_ball'] - g.transform('mean'))
-                    / g.transform('std').replace(0, np.nan))
-    out['z_car'] = out['z_car'].fillna(0.0)
-    return out[['pid', 'season', 'car_ball', 'z_car']]
+    for src, dst in (('car_ball', 'z_ball'), ('car_tkl', 'z_tkl')):
+        g = out.groupby(key, dropna=False)[src]
+        out[dst] = (((out[src] - g.transform('mean'))
+                     / g.transform('std').replace(0, np.nan)).fillna(0.0))
+    out['z_car'] = ((1 - tkl_share) * out['z_ball']
+                    + tkl_share * out['z_tkl'])
+    return out[['pid', 'season', 'car_ball', 'car_tkl', 'z_ball', 'z_tkl',
+                'z_car']]
 
 
-def career_room(size=ROOM_SIZE):
-    """Class-adjusted career production the room brings in, summed."""
-    c = career_production()
+def career_room(size=ROOM_SIZE, tkl_share=0.0, members=None, career=None):
+    """Class-adjusted career production the room brings in, summed.
+
+    members and career are accepted so a sweep over tkl_share can reuse one
+    room and one career table instead of rebuilding both each time.
+    """
+    c = career_production(tkl_share=tkl_share) if career is None else career
     if not len(c):
         return pd.DataFrame(columns=['team_id', 'season', 'car_sum'])
-    m = room_members(size).merge(c, on=['pid', 'season'], how='left')
+    if career is not None:
+        c = c.assign(z_car=(1 - tkl_share) * c['z_ball']
+                     + tkl_share * c['z_tkl'])
+    m = (room_members(size) if members is None else members).merge(
+        c[['pid', 'season', 'z_car']], on=['pid', 'season'], how='left')
     m['z_car'] = m['z_car'].fillna(0.0)
     return m.groupby(['team_id', 'season'], as_index=False).agg(
         car_sum=('z_car', 'sum'))
@@ -428,7 +486,11 @@ def main():
     # (holdout 0.212 that way against 0.242 this way).
     carry = coverage_carry()
     room = secondary_room()
-    career = career_room()
+    # one room and one career table, reused across every tackle share
+    _mem, _car = room_members(), career_production()
+    careers = {i: career_room(tkl_share=t, members=_mem, career=_car)
+               .rename(columns={'car_sum': f'car_sum_{i}'})
+               for i, t in enumerate(CAREER_TKL_SHARES)}
 
     def projection_frame(cs):
         b = blend(d, wc, wb, cs, 0.0)
@@ -441,50 +503,46 @@ def main():
         y = y.merge(prior, on=['team_id', 'season'], how='left')
         y = y.merge(carry, on=['team_id', 'season'], how='left')
         y = y.merge(room, on=['team_id', 'season'], how='left')
-        y = y.merge(career, on=['team_id', 'season'], how='left')
+        for i in careers:
+            y = y.merge(careers[i], on=['team_id', 'season'], how='left')
         g = y.groupby('season')
-        for src, dst in (('cov_carry', 'z_cov_carry'),
-                         ('DB_rating_top', 'zrec'),
-                         ('car_sum', 'z_career')):
+        pairs = [('cov_carry', 'z_cov_carry'), ('DB_rating_top', 'zrec')]
+        pairs += [(f'car_sum_{i}', f'z_career_{i}') for i in careers]
+        for src, dst in pairs:
             y[dst] = g[src].transform(
                 lambda s: (s - s.mean()) / s.std(ddof=0)
                 if s.std(ddof=0) else np.nan)
         # a room returning nobody carries nothing, which is the signal, not a gap
         y['z_cov_carry'] = y['z_cov_carry'].fillna(0.0)
-        y['z_career'] = y['z_career'].fillna(0.0)
+        for i in careers:
+            y[f'z_career_{i}'] = y[f'z_career_{i}'].fillna(0.0)
         return y
 
-    def project(y, cov, car, rc):
-        play = ((1 - cov - car) * y['prior_play'] + cov * y['z_cov_carry']
-                + car * y['z_career'])
-        play = play.fillna(cov * y['z_cov_carry'] + car * y['z_career'])
-        return np.where(y['zrec'].notna(),
-                        (1 - rc) * play + rc * y['zrec'], play)
-
-    # Four shares now, so the loop is ~50,000 evaluations. Doing that with a
-    # DataFrame copy each time takes minutes; pulling the columns out to arrays
+    # Five shares now, so the loop is ~300,000 evaluations. Doing that with a
+    # DataFrame copy each time takes hours; pulling the columns out to arrays
     # once per cover share makes it seconds, and the arithmetic is identical.
+    # Every tackle share is merged into the same frame, so varying it costs a
+    # different column rather than a rebuild.
     def arrays(cs, cache={}):
         if cs in cache:
             return cache[cs]
         y = projection_frame(cs)
-        keep = y[TGT].notna()
-        y = y[keep]
+        y = y[y[TGT].notna()]
         a = dict(
             prior=y['prior_play'].to_numpy(float),
             cov=y['z_cov_carry'].to_numpy(float),
-            car=y['z_career'].to_numpy(float),
+            car={i: y[f'z_career_{i}'].to_numpy(float) for i in careers},
             rec=y['zrec'].to_numpy(float),
             tgt=y[TGT].to_numpy(float),
             p4=y['conference'].isin(P4).to_numpy())
         cache[cs] = a
         return a
 
-    def score(cs, cov, car, rc):
+    def score(cs, cov, car, rc, ti):
         a = arrays(cs)
-        play = ((1 - cov - car) * a['prior'] + cov * a['cov']
-                + car * a['car'])
-        play = np.where(np.isnan(play), cov * a['cov'] + car * a['car'], play)
+        cz = a['car'][ti]
+        play = (1 - cov - car) * a['prior'] + cov * a['cov'] + car * cz
+        play = np.where(np.isnan(play), cov * a['cov'] + car * cz, play)
         has = ~np.isnan(a['rec'])
         p = np.where(has, (1 - rc) * play + rc * np.nan_to_num(a['rec']), play)
         ok = ~np.isnan(p) & ~np.isnan(a['tgt'])
@@ -500,10 +558,11 @@ def main():
             for car in np.arange(0.0, 0.51, 0.05):
                 if cov + car > 0.9:
                     continue
-                for rc in np.arange(0.0, 0.75, 0.05):
-                    r, n = score(cs, cov, car, rc)
-                    if not np.isnan(r):
-                        grid.append((r, cs, cov, car, rc, n))
+                for ti in careers:
+                    for rc in np.arange(0.0, 0.75, 0.05):
+                        r, n = score(cs, cov, car, rc, ti)
+                        if not np.isnan(r):
+                            grid.append((r, cs, cov, car, rc, n, ti))
     top = max(grid)
 
     # The peak of this surface is flat and it sits at a high recruiting share,
@@ -522,10 +581,11 @@ def main():
     # +0.685 at the unconstrained peak, for 0.016 of correlation.
     se = (1 - top[0] ** 2) / np.sqrt(top[5])
     close = [g for g in grid if g[0] >= top[0] - se]
-    r, cover_share, cov_share, car_share, rec_share, nb2 = min(
+    r, cover_share, cov_share, car_share, rec_share, nb2, tidx = min(
         close, key=lambda g: (round(g[4], 4), -g[0]))
-    no_carry, _ = score(cover_share, 0.0, car_share, rec_share)
-    no_car, _ = score(cover_share, cov_share, 0.0, rec_share)
+    tkl_share = CAREER_TKL_SHARES[tidx]
+    no_carry, _ = score(cover_share, 0.0, car_share, rec_share, tidx)
+    no_car, _ = score(cover_share, cov_share, 0.0, rec_share, tidx)
     print("\n### mix chosen by predicting the season it stands before ###")
     print("  scored within conference tier, then averaged")
     print(f"  coverage share of measured play   {cover_share:.2f}")
@@ -534,6 +594,8 @@ def main():
     print(f"  career production, of play        {car_share:.2f}")
     print(f"  last season's play, of play       "
           f"{1 - cov_share - car_share:.2f}")
+    print(f"  tackles' share of career          {tkl_share:.2f}"
+          f"   (ball events {1 - tkl_share:.2f})")
     print(f"  recruiting share of rating        {rec_share:.2f}")
     print(f"  within-tier correlation           {r:.3f}   (n={nb2:,})")
     print(f"  without the carried yards         {no_carry:.3f}   "
@@ -542,6 +604,13 @@ def main():
           f"({r - no_car:+.3f})")
     print(f"  unconstrained peak                {top[0]:.3f}  at rec "
           f"{top[4]:.2f}, given up to keep recruiting low (1 se = {se:.3f})")
+    print("\n  what each tackle share is worth, holding the rest fixed:")
+    for i, t in enumerate(CAREER_TKL_SHARES):
+        v, _ = score(cover_share, cov_share, car_share, rec_share, i)
+        mark = '  <- chosen' if i == tidx else ''
+        print(f"    tackles {t:.2f}   {v:.3f}{mark}")
+
+    career = careers[tidx].rename(columns={f'car_sum_{tidx}': 'car_sum'})
 
     d = blend(d, wc, wb, cover_share, rec_share)
 
