@@ -133,17 +133,21 @@ def roster_lookup():
     initial = roster['firstName'].map(lambda s: norm(s)[:1])
     roster['k'] = list(zip(surname, initial))
 
-    out = {}
     # A quarterback wins any collision on surname-plus-initial, since that is
-    # the position being attributed.
-    for (season, tid, k), g in roster.groupby(['season', 'tid', 'k']):
-        qb = g[g['position'] == 'QB']
-        pick = qb.iloc[0] if len(qb) else g.iloc[0]
-        out[(int(season), int(tid), k)] = (
-            str(pick['id']),
-            f"{pick['firstName']} {pick['lastName']}",
-            pick['position'])
-    return out
+    # the position being attributed; failing that the first row in roster order
+    # wins. Done with a stable sort and drop_duplicates rather than by walking
+    # the groups: there are a quarter of a million of them, and materialising a
+    # sub-frame for each cost 142 seconds per call - paid three times a pipeline
+    # run, because qb, receiver and rb production all need this map.
+    roster = roster.dropna(subset=['season'])
+    roster['_qb'] = (roster['position'] == 'QB').astype(np.int8)
+    pick = (roster.sort_values('_qb', ascending=False, kind='stable')
+                  .drop_duplicates(subset=['season', 'tid', 'k'], keep='first'))
+    names = (pick['firstName'].fillna('').astype(str) + ' '
+             + pick['lastName'].fillna('').astype(str))
+    return dict(zip(
+        zip(pick['season'].astype(int), pick['tid'].astype(int), pick['k']),
+        zip(pick['id'].astype(str), names, pick['position'])))
 
 
 def collect_plays(seasons_by_game, lookup):
@@ -243,10 +247,11 @@ def adjust(per_game, alpha=ALPHA):
         # strength of the defenses faced, centred the same way so that zero
         # means an average schedule rather than an arbitrary offset
         opp_eff = opp_series - opp_mean
-        sd = sd.assign(_o=sd['opponent_id'].map(opp_eff))
-        faced = (sd.groupby('pid')
-                 .apply(lambda g: np.average(g['_o'], weights=g['plays']))
-                 .rename('defense_faced'))
+        # weighted mean per quarterback as two sums rather than a groupby-apply
+        t = sd[['pid', 'plays']].copy()
+        t['_wo'] = sd['opponent_id'].map(opp_eff).to_numpy() * t['plays']
+        agg = t.groupby('pid')[['_wo', 'plays']].sum()
+        faced = (agg['_wo'] / agg['plays']).rename('defense_faced')
         out.append(eff.merge(faced, on='pid', how='left'))
         print(f"  {int(season)}: {len(qbs)} quarterbacks", end='\r')
     print()

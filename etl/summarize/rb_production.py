@@ -114,8 +114,15 @@ def collect(seasons_by_game, lookup):
         if chunk.empty:
             continue
         txt = chunk['play_text']
-        chunk['raw'] = np.where(chunk['rushing_play'] == 1,
-                                txt.map(rusher), txt.map(parse_target))
+        # np.where evaluates both arms, so the previous form ran the rushing
+        # parser over every passing play and the target parser over every
+        # rushing play before discarding half the work. Each parser now sees
+        # only the rows it applies to.
+        is_rush = chunk['rushing_play'] == 1
+        raw = pd.Series(index=chunk.index, dtype=object)
+        raw.loc[is_rush] = txt.loc[is_rush].map(rusher)
+        raw.loc[~is_rush] = txt.loc[~is_rush].map(parse_target)
+        chunk['raw'] = raw
         chunk = chunk.dropna(subset=['raw', 'team_id'])
         if chunk.empty:
             continue
@@ -180,9 +187,13 @@ def opponent_adjust(plays, g, alpha=ALPHA):
                 part[name] = m.intercept_ + m.coef_[:len(backs)]
                 if name == 'adj_yards_per_carry':
                     de = pd.Series(m.coef_[len(backs):], index=defs)
-                    faced = (cell.assign(_d=cell['opponent_id'].map(de))
-                             .groupby('pid').apply(
-                                 lambda x: np.average(x['_d'], weights=x['n'])))
+                    # weighted mean per back, as two sums rather than a
+                    # groupby-apply. The apply built a sub-frame per back per
+                    # season and was most of this module's runtime.
+                    t = cell[['pid', 'n']].copy()
+                    t['_wd'] = cell['opponent_id'].map(de).to_numpy() * t['n']
+                    s = t.groupby('pid')[['_wd', 'n']].sum()
+                    faced = s['_wd'] / s['n']
                     part['run_defense_faced'] = faced.reindex(backs).to_numpy()
             part = pd.DataFrame(part)
             res = part if res is None else res.merge(

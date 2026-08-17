@@ -232,10 +232,13 @@ def opponent_adjust(plays, g, alpha=ALPHA):
             res[name] = m.intercept_ + m.coef_[:len(recs)]
             if col == 'ypt':
                 de = pd.Series(m.coef_[len(recs):], index=defs)
-                faced = (cell.assign(_d=cell['opponent_id'].map(de))
-                         .groupby('rec_id')
-                         .apply(lambda x: np.average(x['_d'], weights=x['n'])))
-                res['defense_faced'] = faced.reindex(recs).to_numpy()
+                # weighted mean per receiver as two sums; the groupby-apply it
+                # replaces built one sub-frame per receiver per season
+                t = cell[['rec_id', 'n']].copy()
+                t['_wd'] = cell['opponent_id'].map(de).to_numpy() * t['n']
+                s = t.groupby('rec_id')[['_wd', 'n']].sum()
+                res['defense_faced'] = (s['_wd'] / s['n']).reindex(
+                    recs).to_numpy()
 
         # per-catch is fitted only over cells where something was caught, and
         # weighted by catches rather than targets
