@@ -57,6 +57,7 @@ from scipy import sparse
 from sklearn.linear_model import Ridge
 
 from qb_production import VERBS, NOT_A_NAME, passer, name_keys, roster_lookup
+from pbp_cache import read_pbp
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 PBP = os.path.join(_HERE, 'temp', 'pbp.csv')
@@ -139,7 +140,7 @@ def resolve(lookup, season, tid, raw):
 def collect(seasons_by_game, lookup):
     """Every pass play with a resolved intended receiver."""
     kept, scanned = [], 0
-    for chunk in pd.read_csv(PBP, usecols=USECOLS, low_memory=False,
+    for chunk in read_pbp(PBP, usecols=USECOLS, low_memory=False,
                              chunksize=CHUNK):
         chunk['game_id'] = pd.to_numeric(chunk['game_id'], errors='coerce')
         chunk['season'] = chunk['game_id'].map(seasons_by_game)

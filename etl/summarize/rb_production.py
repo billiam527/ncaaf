@@ -38,6 +38,7 @@ from sklearn.linear_model import Ridge
 
 from qb_production import name_keys, roster_lookup, norm, SUFFIX
 from receiver_production import target as parse_target
+from pbp_cache import read_pbp
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 PBP = os.path.join(_HERE, 'temp', 'pbp.csv')
@@ -98,7 +99,7 @@ def resolve(lookup, season, tid, raw):
 def collect(seasons_by_game, lookup):
     """Rushing and receiving plays with the ball-carrier resolved."""
     kept, scanned = [], 0
-    for chunk in pd.read_csv(PBP, usecols=USECOLS, low_memory=False,
+    for chunk in read_pbp(PBP, usecols=USECOLS, low_memory=False,
                              chunksize=CHUNK):
         chunk['game_id'] = pd.to_numeric(chunk['game_id'], errors='coerce')
         chunk['season'] = chunk['game_id'].map(seasons_by_game)
@@ -275,7 +276,7 @@ def main():
 
     # An independent check on the attribution. Team rushing yardage from the
     # play flags needs no name parsed, so a gap means backs are being lost.
-    allrush = pd.read_csv(PBP, usecols=['game_id', 'rushing_play',
+    allrush = read_pbp(PBP, usecols=['game_id', 'rushing_play',
                                         'stat_yardage'], low_memory=False)
     allrush['game_id'] = pd.to_numeric(allrush['game_id'], errors='coerce')
     allrush['season'] = allrush['game_id'].map(seasons_by_game)

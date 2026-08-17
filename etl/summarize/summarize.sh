@@ -498,6 +498,19 @@ run_derived() {
     local start
     start=$(date +%s)
 
+    # Decode the play-by-play once. Eight read sites across seven modules used
+    # to tokenise the same 1.3GB CSV independently, at about 45 seconds each;
+    # they now read a 0.53GB pickle of the 20 columns they collectively want, in
+    # about 5. Every module falls back to the CSV if this is missing or stale,
+    # so a failure here costs speed rather than correctness.
+    echo "  stage 0: shared play-by-play cache"
+    if python pbp_cache.py --pbp temp/pbp.csv > temp/pbp_cache.log 2>&1; then
+        sed 's/^/    /' temp/pbp_cache.log
+    else
+        echo "    cache build FAILED - modules will read the CSV directly"
+        tail -3 temp/pbp_cache.log | sed 's/^/      /'
+    fi
+
     local stage n=1
     for stage in "$DERIVED_STAGE_1" "$DERIVED_STAGE_2" "$DERIVED_STAGE_3" \
                  "$DERIVED_STAGE_4" "$DERIVED_STAGE_5"; do

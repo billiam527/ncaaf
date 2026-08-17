@@ -34,6 +34,7 @@ import os
 
 import numpy as np
 import pandas as pd
+from pbp_cache import read_pbp
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ETL = os.path.dirname(_HERE)
@@ -115,7 +116,7 @@ def main():
 
     acc = {}
     rows = 0
-    for chunk in pd.read_csv(args.pbp, usecols=USECOLS, chunksize=CHUNK,
+    for chunk in read_pbp(args.pbp, usecols=USECOLS, chunksize=CHUNK,
                              low_memory=False):
         accumulate(chunk, games, acc)
         rows += len(chunk)

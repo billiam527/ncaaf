@@ -40,6 +40,7 @@ import os
 
 import numpy as np
 import pandas as pd
+from pbp_cache import read_pbp
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 PBP = os.path.join(_HERE, 'temp', 'pbp.csv')
@@ -134,7 +135,7 @@ def main():
     games = games.drop_duplicates('game_id')
 
     acc, rows = [], 0
-    for chunk in pd.read_csv(args.pbp, usecols=USECOLS, chunksize=CHUNK,
+    for chunk in read_pbp(args.pbp, usecols=USECOLS, chunksize=CHUNK,
                              low_memory=False):
         accumulate(chunk, acc)
         rows += len(chunk)
