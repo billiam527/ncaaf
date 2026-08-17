@@ -106,12 +106,48 @@ def secondary_room(size=ROOM_SIZE):
     r = r.dropna(subset=['team_id', 'season', 'rating'])
     r['team_id'] = r['team_id'].astype(int)
     r['season'] = r['season'].astype(int)
+    r['pid'] = r['id'].astype(str)
 
-    top = r.sort_values('rating', ascending=False).groupby(
-        ['team_id', 'season']).head(size)
+    # A man who has played outranks a man who has not, whatever they were
+    # graded out of high school. Ranking on the recruiting composite alone put
+    # Notre Dame's Leonard Moore eleventh in his own 2026 room - a 0.8940
+    # recruit who led that secondary in passes defensed - behind three true
+    # freshmen who have never taken a snap. The grade is frozen at signing; the
+    # production is not.
+    #
+    # Prior-season production decides the order among players who have any, and
+    # the recruiting grade orders the rest. The room's rating is still the mean
+    # composite of whoever is picked, so the scale is unchanged - what changes
+    # is which five are in it.
+    r = r.merge(prior_production(), on=['pid', 'season'], how='left')
+    r['played'] = r['prod_events'].notna().astype(int)
+    r['prod_events'] = r['prod_events'].fillna(0.0)
+    top = (r.sort_values(['played', 'prod_events', 'rating'], ascending=False)
+             .groupby(['team_id', 'season']).head(size))
     out = top.groupby(['team_id', 'season'], as_index=False).agg(
-        DB_rating_top=('rating', 'mean'), DB_n=('rating', 'size'))
+        DB_rating_top=('rating', 'mean'), DB_n=('rating', 'size'),
+        DB_played=('played', 'sum'))
     out.loc[out['DB_n'] < MIN_GRADED, 'DB_rating_top'] = np.nan
+    return out
+
+
+def prior_production(path=None):
+    """Last season's defensive production, stamped onto the season it informs.
+
+    Shifted forward a year so the 2026 room is ordered by what these players
+    did in 2025, which is knowable before 2026 is played.
+    """
+    path = path or os.path.join(_HERE, 'results', 'defensive_production.csv')
+    if not os.path.exists(path):
+        return pd.DataFrame(columns=['pid', 'season', 'prod_events'])
+    d = pd.read_csv(path, low_memory=False)
+    d = d[d['group'] == 'DB']
+    d['pid'] = d['pid'].astype(str)
+    # tackles carry the playing-time signal, coverage events the skill one
+    d['prod_events'] = (d['coverage_events'].fillna(0)
+                        + 0.1 * d['tot_box'].fillna(0))
+    out = d.groupby(['pid', 'season'], as_index=False)['prod_events'].sum()
+    out['season'] += 1
     return out
 
 
@@ -271,6 +307,31 @@ def main():
                                 'ball_skills': 'proj_ball_skills',
                                 'db_play': 'proj_db_play'})
     d = d.merge(proj, on=['team_id', 'season'], how='outer')
+
+    # The frame above is built by an inner join on havoc and season summaries,
+    # both of which stop at the last played season, so the room and conference
+    # merged onto seasons that exist there. The outer merge just created rows
+    # for the season being projected, and they arrived with no room attached -
+    # which left proj_db_rating equal to proj_db_play for every team and quietly
+    # dropped recruiting, 70% of the rating, out of the projection entirely.
+    # Backfill the room for those rows and re-standardise across the whole
+    # frame, so the projected season is scored on the same scale as the rest.
+    room = secondary_room()
+    fill = d[['team_id', 'season']].merge(room, on=['team_id', 'season'],
+                                          how='left')
+    d['DB_rating_top'] = d['DB_rating_top'].fillna(
+        pd.Series(fill['DB_rating_top'].to_numpy(), index=d.index))
+    if 'conference' in d.columns:
+        conf = T[['team_id', 'season', 'conference']].drop_duplicates(
+            ['team_id', 'season'])
+        cf = d[['team_id', 'season']].merge(conf, on=['team_id', 'season'],
+                                            how='left')
+        d['conference'] = d['conference'].fillna(
+            pd.Series(cf['conference'].to_numpy(), index=d.index))
+    g = d.groupby('season')['DB_rating_top']
+    d['z_DB_rating_top'] = ((d['DB_rating_top'] - g.transform('mean'))
+                            / g.transform('std').replace(0, np.nan))
+
     d['proj_db_rating'] = np.where(
         d['z_DB_rating_top'].notna(),
         (1 - rec_share) * d['proj_db_play'] + rec_share * d['z_DB_rating_top'],

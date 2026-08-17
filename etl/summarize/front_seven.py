@@ -294,6 +294,31 @@ def main():
                                 'run_stop': 'proj_run_stop',
                                 'f7_play': 'proj_f7_play'})
     d = d.merge(proj, on=['team_id', 'season'], how='outer')
+
+    # The frame above comes from an inner join on havoc and season summaries,
+    # both of which stop at the last played season, so the room and conference
+    # merged only onto seasons that exist there. The outer merge has just
+    # created rows for the season being projected and they carry no room, which
+    # left proj_f7_rating equal to proj_f7_play for every team and dropped
+    # recruiting out of the projection entirely. Backfill the room for those
+    # rows and re-standardise across the whole frame.
+    room = front_seven_room()
+    fill = d[['team_id', 'season']].merge(room[['team_id', 'season',
+                                                'F7_rating']],
+                                          on=['team_id', 'season'], how='left')
+    d['F7_rating'] = d['F7_rating'].fillna(
+        pd.Series(fill['F7_rating'].to_numpy(), index=d.index))
+    if 'conference' in d.columns:
+        conf = T[['team_id', 'season', 'conference']].drop_duplicates(
+            ['team_id', 'season'])
+        cf = d[['team_id', 'season']].merge(conf, on=['team_id', 'season'],
+                                            how='left')
+        d['conference'] = d['conference'].fillna(
+            pd.Series(cf['conference'].to_numpy(), index=d.index))
+    g = d.groupby('season')['F7_rating']
+    d['z_F7_rating'] = ((d['F7_rating'] - g.transform('mean'))
+                        / g.transform('std').replace(0, np.nan))
+
     d['proj_f7_rating'] = np.where(
         d['z_F7_rating'].notna(),
         (1 - rec_share) * d['proj_f7_play'] + rec_share * d['z_F7_rating'],
