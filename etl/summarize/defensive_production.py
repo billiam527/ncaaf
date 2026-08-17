@@ -254,6 +254,8 @@ def finalise(wide):
 
 COVERAGE_SLOTS = 5      # nickel: two corners, a slot, two safeties
 MIN_TACKLES = 10        # below this a defender did not play enough to credit
+F7_SHARE = 0.0          # how much of the front seven's share to remove first;
+                        # 0 measured better than 1, see coverage_value()
 
 
 def coverage_value(wide):
@@ -268,14 +270,36 @@ def coverage_value(wide):
     offences a team faced, so the league mean minus a team's figure is yards
     saved per dropback against what was expected of it.
 
-    WHAT IS TAKEN OUT FIRST
+    HOW MUCH IS TAKEN OUT FIRST
 
     Not all of that belongs to the secondary. The front seven predicts pass
     defence better than the secondary does - partial correlations of -0.220
-    against +0.065 - because pressure is most of coverage. So the team figure is
-    residualised against the front seven's play before anyone in the secondary
-    is credited with it, exactly as defensive_backs.py does. What is left is the
-    part the pass rush does not account for.
+    against +0.065 - because pressure is most of coverage. The obvious move is
+    to residualise the team figure against the front seven before anyone in the
+    secondary is credited with it, exactly as defensive_backs.py does to the
+    rate measures.
+
+    Measured, that is the wrong move here. Correlation of the carried credit
+    with the defence it is used to project, over 2019-2025:
+
+        F7_SHARE 0.00   +0.243      nothing removed
+        F7_SHARE 0.25   +0.231
+        F7_SHARE 0.50   +0.212
+        F7_SHARE 0.75   +0.182
+        F7_SHARE 1.00   +0.138      full residualisation
+
+    Removing the front seven removes signal. The reason is that this measure is
+    not a rate, it is a rate carried by people: a team returning all five men
+    carries the whole figure and a team returning none carries nothing, so most
+    of what it says is about roster turnover, which f7_play knows nothing about.
+    Residualising throws that away to solve an attribution problem the rate
+    measures have and this one does not.
+
+    So the front seven is left in. The cost is real and worth stating: the
+    credit a secondary carries is partly its pass rush's, and front_seven.py
+    rates that same pass rush separately, so the two unit ratings are more
+    correlated than they look. Downstream that is a ridge's problem, not this
+    module's.
 
     WHO GETS IT
 
@@ -311,7 +335,7 @@ def coverage_value(wide):
     # saved yards is the league mean minus the team figure
     t['saved'] = t.groupby('season')[col].transform('mean') - t[col]
 
-    if os.path.exists(f7):
+    if F7_SHARE > 0 and os.path.exists(f7):
         F = pd.read_csv(f7, low_memory=False)[['team_id', 'season', 'f7_play']]
         t = t.merge(F, on=['team_id', 'season'], how='left')
         out = []
@@ -322,13 +346,12 @@ def coverage_value(wide):
             else:
                 A = np.column_stack([np.ones(len(m)), m['f7_play'].to_numpy()])
                 b, *_ = np.linalg.lstsq(A, m['saved'].to_numpy(), rcond=None)
-                g = g.assign(resid=g['saved']
-                             - (b[0] + b[1] * g['f7_play'].fillna(
-                                 g['f7_play'].mean())))
+                g = g.assign(resid=g['saved'] - F7_SHARE * (
+                    b[0] + b[1] * g['f7_play'].fillna(g['f7_play'].mean())))
             out.append(g)
         t = pd.concat(out, ignore_index=True)
     else:
-        t['resid'] = t['saved'] - t.groupby('season')['saved'].transform('mean')
+        t['resid'] = t['saved']
 
     # A floor on tackles, because without one the top five by tackles on a
     # thinly covered roster is five men with two tackles between them, and the

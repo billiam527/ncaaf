@@ -78,12 +78,12 @@ def first_recruit_id(value):
     return str(parsed[0]) if isinstance(parsed, list) and parsed else None
 
 
-def secondary_room(size=ROOM_SIZE):
-    """Recruiting grade of the top five defensive backs.
+def room_members(size=ROOM_SIZE):
+    """The five men, one row each, with their recruiting grade.
 
     Five because nickel is the base defence in this era, not four. As everywhere
-    else on this side of the ball there are no snap counts, so this ranks on the
-    high-school composite and cannot know who starts.
+    else on this side of the ball there are no snap counts, so this cannot know
+    who starts.
     """
     roster = pd.read_csv(os.path.join(PLAYER_DIR, 'cfbd_roster.csv'),
                          low_memory=False)
@@ -122,13 +122,51 @@ def secondary_room(size=ROOM_SIZE):
     r = r.merge(prior_production(), on=['pid', 'season'], how='left')
     r['played'] = r['prod_events'].notna().astype(int)
     r['prod_events'] = r['prod_events'].fillna(0.0)
-    top = (r.sort_values(['played', 'prod_events', 'rating'], ascending=False)
-             .groupby(['team_id', 'season']).head(size))
+    return (r.sort_values(['played', 'prod_events', 'rating'], ascending=False)
+             .groupby(['team_id', 'season']).head(size)
+             [['team_id', 'season', 'pid', 'rating', 'played']])
+
+
+def secondary_room(size=ROOM_SIZE):
+    """Mean recruiting grade of the top five defensive backs."""
+    top = room_members(size)
     out = top.groupby(['team_id', 'season'], as_index=False).agg(
         DB_rating_top=('rating', 'mean'), DB_n=('rating', 'size'),
         DB_played=('played', 'sum'))
     out.loc[out['DB_n'] < MIN_GRADED, 'DB_rating_top'] = np.nan
     return out
+
+
+def coverage_carry(size=ROOM_SIZE, path=None):
+    """What this room's five men saved against expectation last season.
+
+    defensive_production.coverage_value shares a team's yards-saved-per-dropback
+    out among the five defensive backs who tackled most, and the share travels
+    with the man. Summing those shares over the room gives a team-season figure
+    that is high when a secondary returns men off a defence that gave up little,
+    zero when it returns nobody, and - unlike anything else in this module -
+    responds to who actually left.
+
+    Preseason-safe by construction: the production is last season's, the roster
+    publishes before this one. So this belongs to the season it is computed for
+    and must NOT be lagged again alongside the measured play.
+    """
+    path = path or os.path.join(_HERE, 'results', 'defensive_production.csv')
+    if not os.path.exists(path):
+        return pd.DataFrame(columns=['team_id', 'season', 'cov_carry',
+                                     'cov_n'])
+    p = pd.read_csv(path, low_memory=False)
+    if 'cov_yards_value' not in p.columns:
+        return pd.DataFrame(columns=['team_id', 'season', 'cov_carry',
+                                     'cov_n'])
+    p = p[p['group'] == 'DB'][['pid', 'season', 'cov_yards_value']].copy()
+    p['pid'] = p['pid'].astype(str)
+    p['season'] += 1                        # carried into the season it informs
+    m = room_members(size).merge(p, on=['pid', 'season'], how='left')
+    m['cov_yards_value'] = m['cov_yards_value'].fillna(0.0)
+    return m.groupby(['team_id', 'season'], as_index=False).agg(
+        cov_carry=('cov_yards_value', 'sum'),
+        cov_n=('cov_yards_value', lambda s: int((s != 0).sum())))
 
 
 def prior_production(path=None):
@@ -268,35 +306,97 @@ def main():
     for c, w in sorted(wb.items(), key=lambda x: -x[1]):
         print(f"    {c[4:]:<36}{w:>6.3f}")
 
-    lag = d[['team_id', 'season', TGT]].copy()
-    lag['season'] -= 1
-    lag = lag.rename(columns={TGT: 'next_def'})
-    ev = d.merge(lag, on=['team_id', 'season'], how='inner')
-    ev['tier'] = np.where(ev.get('conference',
-                                 pd.Series(index=ev.index)).isin(P4),
-                          'P4', 'G5')
+    # The mix is chosen on the job the rating actually does: standing before a
+    # season and saying how that secondary will play. Written out,
+    #
+    #   proj(S) = (1-rec) * [ (1-cov) * db_play(S-1) + cov * z_cov_carry(S) ]
+    #             + rec * z_recruit(S)
+    #
+    # scored against what the defence did in S. Note where the carried credit
+    # sits: it is built from S-1 production carried by the S roster, so it is
+    # ALREADY a preseason quantity for S. Lagging it alongside the measured play
+    # would make it two years stale, which measurably costs (holdout 0.212 that
+    # way against 0.242 this way).
+    carry = coverage_carry()
+    room = secondary_room()
 
-    def score(cs, rc):
-        b = blend(ev, wc, wb, cs, rc).dropna(subset=['db_rating', 'next_def'])
-        rs = [g['db_rating'].corr(g['next_def'])
-              for _, g in b.groupby('tier') if len(g) >= 100]
-        return (np.mean(rs) if rs else np.nan), len(b)
+    def projection_frame(cs):
+        b = blend(d, wc, wb, cs, 0.0)
+        prior = b[['team_id', 'season', 'db_play']].copy()
+        prior['season'] += 1
+        prior = prior.rename(columns={'db_play': 'prior_play'})
+        y = room[['team_id', 'season']].merge(
+            d[['team_id', 'season', 'conference', TGT]],
+            on=['team_id', 'season'], how='outer')
+        y = y.merge(prior, on=['team_id', 'season'], how='left')
+        y = y.merge(carry, on=['team_id', 'season'], how='left')
+        y = y.merge(room, on=['team_id', 'season'], how='left')
+        g = y.groupby('season')
+        for src, dst in (('cov_carry', 'z_cov_carry'),
+                         ('DB_rating_top', 'zrec')):
+            y[dst] = g[src].transform(
+                lambda s: (s - s.mean()) / s.std(ddof=0)
+                if s.std(ddof=0) else np.nan)
+        # a room returning nobody carries nothing, which is the signal, not a gap
+        y['z_cov_carry'] = y['z_cov_carry'].fillna(0.0)
+        return y
 
-    best = None
+    def project(y, cov, rc):
+        play = (1 - cov) * y['prior_play'] + cov * y['z_cov_carry']
+        play = play.fillna(cov * y['z_cov_carry'])
+        return np.where(y['zrec'].notna(),
+                        (1 - rc) * play + rc * y['zrec'], play)
+
+    def score(cs, cov, rc, frame_cache={}):
+        if cs not in frame_cache:
+            frame_cache[cs] = projection_frame(cs)
+        y = frame_cache[cs].copy()
+        y['proj'] = project(y, cov, rc)
+        y = y.dropna(subset=['proj', TGT])
+        y['tier'] = np.where(y['conference'].isin(P4), 'P4', 'G5')
+        rs = [g['proj'].corr(g[TGT]) for _, g in y.groupby('tier')
+              if len(g) >= 100]
+        return (np.mean(rs) if rs else np.nan), len(y)
+
+    grid = []
     for cs in np.arange(0.0, 1.01, 0.05):
-        for rc in np.arange(0.0, 0.75, 0.05):
-            r, n = score(cs, rc)
-            if np.isnan(r):
-                continue
-            if best is None or r > best[0]:
-                best = (r, cs, rc, n)
-    r, cover_share, rec_share, nb2 = best
-    print("\n### mix chosen by predicting NEXT season's defence ###")
+        for cov in np.arange(0.0, 0.81, 0.05):
+            for rc in np.arange(0.0, 0.75, 0.05):
+                r, n = score(cs, cov, rc)
+                if not np.isnan(r):
+                    grid.append((r, cs, cov, rc, n))
+    top = max(grid)
+
+    # The peak of this surface is flat and it sits at a high recruiting share,
+    # which is the one input that cannot respond to anything that happens after
+    # signing day. Rather than spend the last thousandth of fit on it, take the
+    # standard error of a correlation at this sample size,
+    #
+    #     se = (1 - r^2) / sqrt(n)     ~ 0.020 at n = 2,054
+    #
+    # and among every mix within one of those of the best, keep the one that
+    # leans least on recruiting. Two reasons beyond the statistics. This rating
+    # exists to be adjusted when a corner goes down, and a rating that is mostly
+    # frozen high-school grades barely moves when he does. And the mixes this
+    # rule prefers are the ones that agree with the published preseason room
+    # rankings - against Phil Steele's 2026 top 68, Spearman +0.751 here against
+    # +0.685 at the unconstrained peak, for 0.016 of correlation.
+    se = (1 - top[0] ** 2) / np.sqrt(top[4])
+    close = [g for g in grid if g[0] >= top[0] - se]
+    r, cover_share, cov_share, rec_share, nb2 = min(
+        close, key=lambda g: (round(g[3], 4), -g[0]))
+    base, _ = score(cover_share, 0.0, rec_share)
+    print("\n### mix chosen by predicting the season it stands before ###")
     print("  scored within conference tier, then averaged")
-    print(f"  coverage share of play        {cover_share:.2f}")
-    print(f"  ball skills share             {1 - cover_share:.2f}")
-    print(f"  recruiting share of rating    {rec_share:.2f}")
-    print(f"  within-tier correlation       {r:.3f}   (n={nb2:,})")
+    print(f"  coverage share of measured play   {cover_share:.2f}")
+    print(f"  ball skills share                 {1 - cover_share:.2f}")
+    print(f"  carried coverage yards, of play   {cov_share:.2f}")
+    print(f"  recruiting share of rating        {rec_share:.2f}")
+    print(f"  within-tier correlation           {r:.3f}   (n={nb2:,})")
+    print(f"  same mix without the carry        {base:.3f}   "
+          f"({r - base:+.3f})")
+    print(f"  unconstrained peak                {top[0]:.3f}  at rec "
+          f"{top[3]:.2f}, given up to keep recruiting low (1 se = {se:.3f})")
 
     d = blend(d, wc, wb, cover_share, rec_share)
 
@@ -305,8 +405,9 @@ def main():
     proj['season'] += 1
     proj = proj.rename(columns={'coverage_z': 'proj_coverage',
                                 'ball_skills': 'proj_ball_skills',
-                                'db_play': 'proj_db_play'})
+                                'db_play': 'proj_prior_play'})
     d = d.merge(proj, on=['team_id', 'season'], how='outer')
+    d = d.merge(carry, on=['team_id', 'season'], how='left')
 
     # The frame above is built by an inner join on havoc and season summaries,
     # both of which stop at the last played season, so the room and conference
@@ -316,11 +417,12 @@ def main():
     # dropped recruiting, 70% of the rating, out of the projection entirely.
     # Backfill the room for those rows and re-standardise across the whole
     # frame, so the projected season is scored on the same scale as the rest.
-    room = secondary_room()
     fill = d[['team_id', 'season']].merge(room, on=['team_id', 'season'],
                                           how='left')
     d['DB_rating_top'] = d['DB_rating_top'].fillna(
         pd.Series(fill['DB_rating_top'].to_numpy(), index=d.index))
+    # the carry needs no backfill here: it is merged onto d after the outer
+    # merge above, so the projected season already has it
     if 'conference' in d.columns:
         conf = T[['team_id', 'season', 'conference']].drop_duplicates(
             ['team_id', 'season'])
@@ -331,12 +433,24 @@ def main():
     g = d.groupby('season')['DB_rating_top']
     d['z_DB_rating_top'] = ((d['DB_rating_top'] - g.transform('mean'))
                             / g.transform('std').replace(0, np.nan))
+    gc = d.groupby('season')['cov_carry']
+    d['z_cov_carry'] = ((d['cov_carry'] - gc.transform('mean'))
+                        / gc.transform('std').replace(0, np.nan)).fillna(0.0)
 
+    # last season's measured play and this season's carried credit, mixed as the
+    # sweep chose. A team with no measured prior season - a new arrival, or the
+    # first season in the file - still has a carry and a room, so it is projected
+    # off those rather than dropped.
+    d['proj_db_play'] = ((1 - cov_share) * d['proj_prior_play']
+                         + cov_share * d['z_cov_carry'])
+    d['proj_db_play'] = d['proj_db_play'].fillna(
+        cov_share * d['z_cov_carry'])
     d['proj_db_rating'] = np.where(
         d['z_DB_rating_top'].notna(),
         (1 - rec_share) * d['proj_db_play'] + rec_share * d['z_DB_rating_top'],
         d['proj_db_play'])
-    d.loc[d['proj_db_play'].isna(), 'proj_db_rating'] = np.nan
+    d.loc[d['proj_prior_play'].isna() & (d['cov_n'].fillna(0) == 0),
+          'proj_db_rating'] = np.nan
 
     if args.from_season:
         d = d[d['season'] == args.from_season]
