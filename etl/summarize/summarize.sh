@@ -9,6 +9,8 @@ STATS="play_success rush_success pass_success yards_per_play rush_yards_per_play
 ENABLE_SMART_CACHING=true
 INCREMENTAL_MODE=true
 MAX_PARALLEL_JOBS=3
+RUN_DERIVED=true
+DERIVED_ONLY=false
 
 # Where to look for games/pbp/teams inputs, in priority order.
 # Fresh format/ output wins; ../data/*/formatted is the on-disk fallback holding
@@ -90,9 +92,20 @@ while [[ $# -gt 0 ]]; do
             MAX_PARALLEL_JOBS="$2"
             shift 2
             ;;
+        --skip-derived)
+            RUN_DERIVED=false
+            echo "Derived summaries disabled - season_summaries only"
+            shift
+            ;;
+        --derived-only)
+            DERIVED_ONLY=true
+            echo "Derived summaries only - season_summaries will not be rebuilt"
+            shift
+            ;;
         *)
             echo "Unknown option: $1"
             echo "Usage: $0 [--full] [--no-cache] [--parallel-jobs N]"
+            echo "          [--skip-derived] [--derived-only]"
             exit 1
             ;;
     esac
@@ -416,6 +429,111 @@ run_analysis() {
 }
 
 # ==============================================
+# DERIVED SUMMARIES
+# ==============================================
+#
+# summarize_games.py produces season_summaries and the rolling files. Everything
+# else in results/ is derived from those plus the play-by-play, and until this
+# stage existed every one of them was run by hand. That left the directory
+# holding files built five days apart - season_summaries from one afternoon,
+# ol_production from three days later off the same play-by-play, returning
+# production older than both - with nothing to say so.
+#
+# It matters now because the preseason model consumes returning_production,
+# team_talent and position_ratings directly. A missing position_ratings.csv does
+# not fail loudly at this end: the merge in preprocess.py silently returns the
+# frame unchanged, the feature matrix comes out narrower than the scaler, and the
+# error surfaces at prediction time as a width mismatch.
+#
+# Order is dependency order, not preference. Anything in a later stage reads a
+# file an earlier stage writes.
+#
+#   1  independent scans of the play-by-play
+#   2  needs stage 1, or reads the CFBD player files directly
+#   3  needs season_summaries plus a stage-2 file
+#   4  needs front_seven
+#   5  needs every projection above it
+#
+# A stage-1 or stage-2 failure is reported and the run continues, because these
+# are independent of one another and a missing CFBD player file should not cost
+# the whole rebuild. position_ratings is different: if it fails the model cannot
+# be trained, so the function returns non-zero.
+
+DERIVED_STAGE_1="havoc qb_production receiver_production rb_production
+                 ol_production drive_factors run_pass_ratio"
+DERIVED_STAGE_2="adjust_havoc talent_by_position returning_production
+                 team_talent roster_talent qb_projection receiver_projection
+                 rb_projection"
+DERIVED_STAGE_3="ol_projection front_seven"
+DERIVED_STAGE_4="defensive_backs"
+DERIVED_STAGE_5="position_ratings"
+
+DERIVED_FAILED=""
+DERIVED_OK=""
+
+run_derived_module() {
+    local mod="$1"
+    if [ ! -f "${mod}.py" ]; then
+        echo "    ${mod}: no such module, skipped"
+        return 0
+    fi
+    local t0 t1
+    t0=$(date +%s)
+    if python "${mod}.py" > "temp/${mod}.log" 2>&1; then
+        t1=$(date +%s)
+        echo "    ${mod}: ok ($((t1 - t0))s)"
+        DERIVED_OK+=" ${mod}"
+        return 0
+    fi
+    t1=$(date +%s)
+    echo "    ${mod}: FAILED after $((t1 - t0))s - temp/${mod}.log"
+    tail -3 "temp/${mod}.log" | sed 's/^/      /'
+    DERIVED_FAILED+=" ${mod}"
+    return 1
+}
+
+run_derived() {
+    echo ""
+    echo "Building derived summaries..."
+    local start
+    start=$(date +%s)
+
+    local stage n=1
+    for stage in "$DERIVED_STAGE_1" "$DERIVED_STAGE_2" "$DERIVED_STAGE_3" \
+                 "$DERIVED_STAGE_4" "$DERIVED_STAGE_5"; do
+        echo "  stage ${n}:"
+        local mod
+        for mod in $stage; do
+            # set -e is on; these are allowed to fail without killing the run
+            run_derived_module "$mod" || true
+        done
+        n=$((n + 1))
+    done
+
+    local end
+    end=$(date +%s)
+    echo "  derived summaries took $(( (end - start) / 60 ))m $(( (end - start) % 60 ))s"
+
+    if [ -n "$DERIVED_FAILED" ]; then
+        echo "  FAILED:$DERIVED_FAILED"
+    fi
+
+    # The model cannot be trained without these three, so their absence is the
+    # difference between a degraded run and a broken one.
+    local required="results/position_ratings.csv results/returning_production.csv
+                    results/team_talent.csv"
+    local missing="" f
+    for f in $required; do
+        [ -f "$f" ] || missing+=" $(basename "$f")"
+    done
+    if [ -n "$missing" ]; then
+        echo "  ERROR: the preseason model requires:$missing"
+        return 1
+    fi
+    return 0
+}
+
+# ==============================================
 # CONDITIONAL RESULTS UPLOAD
 # ==============================================
 
@@ -515,21 +633,50 @@ main() {
         echo "ERROR: Data acquisition failed"
         exit 1
     fi
-    
+
+    if [ "$DERIVED_ONLY" = true ]; then
+        # Rebuild everything downstream of season_summaries without redoing the
+        # opponent-adjustment pass. Note this is not cheap: six stage-1 modules
+        # scan the play-by-play independently, so the saving is one pass out of
+        # seven, not the bulk of the run.
+        if ! run_derived; then
+            echo "ERROR: Derived summaries failed"
+            exit 1
+        fi
+        echo ""
+        echo "Derived summaries rebuilt."
+        exit 0
+    fi
+
     # Step 2: Check for incremental processing
     if check_incremental_processing; then
         echo "Incremental check passed - results are up-to-date"
         echo "Summarization completed (no processing needed)!"
         exit 0
     fi
-    
+
     # Step 3: Run analysis
     if ! run_analysis; then
         echo "ERROR: Analysis failed"
         exit 1
     fi
-    
-    # Step 4: Conditional upload results
+
+    # Step 4: Everything derived from it. Skipping this leaves results/ holding
+    # a fresh season_summaries beside stale derived files that were built from
+    # an older one, which is harder to notice than an outright failure.
+    if [ "$RUN_DERIVED" = true ]; then
+        if ! run_derived; then
+            echo "ERROR: Derived summaries failed"
+            exit 1
+        fi
+    else
+        echo ""
+        echo "WARNING: --skip-derived. results/ now holds a fresh"
+        echo "         season_summaries beside derived files built from an"
+        echo "         older one. The preseason model reads both."
+    fi
+
+    # Step 5: Conditional upload results
     if ! upload_results; then
         echo "ERROR: Upload failed"
         exit 1

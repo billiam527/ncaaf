@@ -148,7 +148,14 @@ def main():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--season', type=int, default=2026)
-    ap.add_argument('--from-season', type=int, default=None,
+    # Defaults to the full history, matching rb_projection and
+    # receiver_projection. It used to default to None, which produced the
+    # --season row alone: bare `python qb_projection.py` wrote 137 team-seasons
+    # where its siblings wrote 1,300, and position_ratings then carried a pf_qb
+    # column that was empty for every season before the last one. Nothing
+    # complained, because a projection file with one season in it is a perfectly
+    # valid file.
+    ap.add_argument('--from-season', type=int, default=2017,
                     help='project every season from here to --season, each '
                          'fitted only on what came before it')
     ap.add_argument('--fit-cutoff', type=int, default=2022,
