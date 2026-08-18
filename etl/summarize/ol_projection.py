@@ -25,12 +25,51 @@ rating because pass protection is real, but it is not allowed to dominate, and
 the run-blocking and pass-protection halves are also reported separately so the
 distinction stays visible.
 
+THE PROJECTION IS MIXED SEPARATELY FROM THE RATING
+
+There are two mixes here, not one, and an earlier version fitted the first and
+reused it for the second. ol_rating combines THIS season's blocking with THIS
+season's roster; proj_ol_rating combines LAST season's blocking with this
+season's roster. Carried blocking is much the weaker of the two - within tier it
+predicts next season's offense at 0.25 against 0.49 for the contemporaneous
+figure - so the share left over for recruiting should be larger in the
+projection, and fitting it on the blend held it down. Tuned on its own problem
+the projection's recruiting share is 0.60 rather than 0.30, and it is better on
+both criteria: within-tier correlation on the 2023-25 holdout rises 0.230 to
+0.252, and seven of the eleven lines Yahoo and CBS agree on land in our top
+fifteen instead of four.
+
+The run share is left where the blend fits it. Across the selection band the
+projection is indifferent to it - anything from 0.50 to 1.00 sits inside half a
+standard error - so there is nothing to choose on and no reason to move it.
+
 WHAT IS NOT HERE
 
 No yards before contact, no time to throw. Both are charted by a human watching
 film and neither exists in play-by-play or in CFBD. Line yards is the standard
 rules-based stand-in for the first, on gain bands rather than on contact; there
 is no stand-in for the second. See ol_production.py.
+
+And no player-carried term. Every other unit has one: the secondary and the
+front seven carry production forward on the men who produced it, because those
+men appear in the play text. Linemen never do. Two stand-ins were built and both
+came back null, measured on 2019-22 and confirmed on 2023-25:
+
+  continuity, how much of last year's line is still on the roster, matched on a
+  player id that survives both a new season and a transfer. On its own it is
+  -0.055 on the holdout, and blended into carried play at any weight it makes
+  the holdout worse. Note the first pass at this looked unstable - continuity
+  swinging from 0.73 in 2021 to 0.32 in 2023 - which turned out to be the roster
+  file rather than football; see top_room below.
+
+  experience, seasons already on a roster, counted from roster history rather
+  than the `year` label, which does not survive a redshirt. Also null: -0.001
+  tuning and 0.001 on the holdout. This extends what was already known here.
+  Every age DISCOUNT tried made prediction worse; experience does no better as
+  its own additive term than it did as a multiplier on the grade.
+
+So the room grade is the only player-level information this unit has, which is
+part of why it earns a larger share here than anywhere else.
 
 Usage:
     python ol_projection.py --out results/ol_projection.csv
@@ -79,6 +118,17 @@ def first_recruit_id(value):
     return str(parsed[0]) if isinstance(parsed, list) and parsed else None
 
 
+def fbs_mask(df):
+    """True where (team_id, season) was an FBS team that season."""
+    c = pd.read_csv(os.path.join(PLAYER_DIR, 'cfbd_classification.csv'),
+                    low_memory=False)
+    fbs = {int(s): set(g.loc[g['fbs'] == 1, 'team_id'])
+           for s, g in c.groupby('season')}
+    return pd.Series(
+        [int(t) in fbs.get(int(s), set())
+         for s, t in zip(df['season'], df['team_id'])], index=df.index)
+
+
 def top_room(size=ROOM_SIZE):
     """Recruiting grade of the best `size` linemen on the roster.
 
@@ -98,6 +148,17 @@ def top_room(size=ROOM_SIZE):
     last one promotes a two-star senior over a 0.98 freshman. Without snaps the
     grade is not identifying starters, it is indexing how good the room is, and
     a freshman counts toward that honestly.
+
+    Restricted to FBS. teams.csv carries FCS schools, so any of them on the
+    roster file gets an id and reaches this function - and the roster file holds
+    77 non-FBS schools in 2022 and 84 in 2025 against two to seven in every other
+    season. Since the grade is standardized WITHIN season, a crowd of weak-
+    recruiting schools appearing in two seasons only drops the mean in exactly
+    those years and inflates every FBS z-score there, by about 0.12 of a standard
+    deviation in 2025. That is a season-specific distortion of a quantity that is
+    supposed to mean rank against the year, and it also broke the first
+    continuity measurement: a man on a 2022 FCS roster who is not on a 2023 FBS
+    roster read as a departure.
     """
     roster = pd.read_csv(os.path.join(PLAYER_DIR, 'cfbd_roster.csv'),
                          low_memory=False)
@@ -120,6 +181,7 @@ def top_room(size=ROOM_SIZE):
     ol = ol.dropna(subset=['team_id', 'season', 'rating'])
     ol['team_id'] = ol['team_id'].astype(int)
     ol['season'] = ol['season'].astype(int)
+    ol = ol[fbs_mask(ol)]
 
     ol = ol.sort_values('rating', ascending=False)
     top = ol.groupby(['team_id', 'season']).head(size)
@@ -199,8 +261,15 @@ def main():
 
     # the top five, not the whole group
     d = d.merge(top_room(ROOM_SIZE), on=['team_id', 'season'], how='left')
+    # The fallback is a DIFFERENT quantity, not a missing value of the same one:
+    # a mean over five men against a mean over the whole two-deep, and the second
+    # runs low because it includes the bottom of the roster. Filling one with the
+    # other and standardizing the result treats them as one column, so every team
+    # short of five graded linemen is pushed down the rating for the shape of its
+    # roster file rather than the quality of its line. Each is standardized on
+    # its own below and the z-scores are combined instead.
     full = d['OL_rating'].copy()
-    d['OL_rating'] = d['OL5_rating'].fillna(full)
+    d['OL_group'] = full
     both = d.dropna(subset=['OL5_rating', 'adj_line_yards'])
     fb = d.dropna(subset=['adj_line_yards'])
     fb = fb[full.reindex(fb.index).notna()]
@@ -224,7 +293,14 @@ def main():
     d = d.merge(S[['team_id', 'season'] + have], on=['team_id', 'season'],
                 how='left')
 
-    d = zscore(d, list(RUN_PARTS) + list(PASS_PARTS) + ['OL_rating'])
+    d = zscore(d, list(RUN_PARTS) + list(PASS_PARTS)
+               + ['OL5_rating', 'OL_group'])
+    # top five where we have five, the whole group standardized separately where
+    # we do not, so the two scales never meet
+    d['z_OL_rating'] = d['z_OL5_rating'].fillna(d['z_OL_group'])
+    d['OL_rating'] = d['OL5_rating'].fillna(d['OL_group'])
+    nfb = int(d['z_OL5_rating'].isna().sum() - d['z_OL_rating'].isna().sum())
+    print(f"  fell back to the whole-group mean on {nfb:,} team-seasons")
 
     wr, r2r, nr = fit_weights(d, RUN_PARTS, RUSH_T)
     wp, r2p, npp = fit_weights(d, PASS_PARTS, PASS_T)
@@ -303,8 +379,51 @@ def main():
                                 'pass_protect': 'proj_pass_protect',
                                 'ol_play': 'proj_ol_play'})
     d = d.merge(proj, on=['team_id', 'season'], how='outer')
-    d['proj_ol_rating'] = ((1 - rec_share) * d['proj_ol_play']
-                           + rec_share * d['z_OL_rating'].fillna(0))
+
+    # The projection gets its OWN recruiting share, fitted on its own problem.
+    # Reusing rec_share from the blend above is a category error: that share was
+    # chosen against THIS season's blocking, which is a far stronger signal than
+    # the carried figure, so it leaves recruiting less to do than the projection
+    # needs. Chosen on 2019-22 and confirmed on 2023-25, never the reverse.
+    #
+    # The selection band - half a standard error, as next door - runs from 0.35
+    # to 0.70, which is wide, so it is worth saying where inside it the published
+    # preseason lists sit. Yahoo's top 25 and CBS's top 10 agree on membership
+    # and not much else: nine of CBS's ten are in Yahoo's, but their rank
+    # correlation on the teams they share is only +0.50. Counting how many of the
+    # eleven lines they jointly like land in our top fifteen, the band's lower
+    # end gets five and everything from 0.45 up gets seven. The tuning peak falls
+    # at 0.55, inside the part both criteria prefer, so there is nothing to trade
+    # here and the peak is taken as it stands.
+    if 'next_off' not in d.columns:
+        d = d.merge(lag, on=['team_id', 'season'], how='left')
+    if 'team' not in d.columns:
+        _tm2 = pd.read_csv(TEAMS)
+        d['team'] = d['team_id'].map(dict(zip(_tm2['id'], _tm2['location'])))
+    d['tier'] = tier_series(d)
+    tune = d[d['season'].between(2019, 2022)]
+    hold = d[d['season'].between(2023, 2025)]
+
+    def proj_score(frame, rc):
+        x = frame.assign(_t=(1 - rc) * frame['proj_ol_play']
+                         + rc * frame['z_OL_rating'].fillna(0))
+        x = x.dropna(subset=['_t', 'next_off', 'tier'])
+        rs_ = [g['_t'].corr(g['next_off']) for _, g in x.groupby('tier')
+               if len(g) >= 60]
+        return (float(np.mean(rs_)) if rs_ else np.nan), len(x)
+
+    cand = [(proj_score(tune, rc)[0], rc) for rc in np.arange(0.0, 0.86, 0.05)]
+    cand = [c for c in cand if not np.isnan(c[0])]
+    proj_rec, nt = max(cand)[1], proj_score(tune, max(cand)[1])[1]
+    print("\n### the projection's own mix, fitted on the carried figure ###")
+    print(f"  recruiting share of projection {proj_rec:.2f}"
+          f"   (the blend uses {rec_share:.2f})")
+    print(f"  tuning 2019-22                 {max(cand)[0]:.3f}  (n={nt:,})")
+    print(f"  holdout 2023-25                {proj_score(hold, proj_rec)[0]:.3f}"
+          f"   against {proj_score(hold, rec_share)[0]:.3f} at the blend's share")
+
+    d['proj_ol_rating'] = ((1 - proj_rec) * d['proj_ol_play']
+                           + proj_rec * d['z_OL_rating'].fillna(0))
     # with no prior play at all there is nothing to carry, so drop the row
     d.loc[d['proj_ol_play'].isna(), 'proj_ol_rating'] = np.nan
 
@@ -319,6 +438,12 @@ def main():
     t = pd.read_csv(TEAMS)
     d['team'] = d['team_id'].map(dict(zip(t['id'], t['location'])))
     d = d.sort_values(['season', 'ol_rating'], ascending=[True, False])
+
+    # next_off is season S's OWN offense, joined only to fit the mix above. It
+    # must not reach the file: everything here is meant to stand before the
+    # season, and a column holding the answer is one careless join away from
+    # being used as a feature.
+    d = d.drop(columns=[c for c in ('next_off',) if c in d.columns])
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     d.to_csv(args.out, index=False)
