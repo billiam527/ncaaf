@@ -62,28 +62,35 @@ adjustment is untrustworthy, and recovers those weeks from 13.30 to 12.98. Weeks
 Gaps are left as NaN rather than filled. XGBoost learns a default direction per
 split, so a missing adjustment is information rather than a hole.
 
-IT ALSO GETS WHAT WE KNEW BEFORE THE SEASON
+IT DELIBERATELY DOES NOT SEE PRESEASON INFORMATION
 
-Rebuilt on rolling form alone the model had twelve columns and no memory: in
-week 2 it knew one game about each side and nothing else. Adding last season's
-opponent-adjusted EPA and the eight preseason position ratings is worth a lot,
-and worth it exactly where you would expect:
+Rolling form alone leaves this model with no memory: in week 2 it knows one game
+about each side and nothing else. Adding last season's adjusted EPA and the
+eight preseason position ratings fixes that and makes this model substantially
+better ON ITS OWN, 13.49 to 12.93 MAE.
 
-    2025 holdout          R2     MAE
-      rolling only      0.256  13.724
-      + prior EPA       0.311  13.262
-      + position        0.331  13.268
-      + both            0.336  13.210
+It was tried, and then removed, because it makes the SYSTEM worse. The preseason
+model is built from those same quantities, so handing them here too makes the
+pair redundant: the correlation between the two models' predictions rises from
++0.492 to +0.788. Blending two models that increasingly say the same thing gains
+less than blending two that see different evidence.
 
-    by week, rolling-only against both, MAE
-      weeks 2-3      16.26 -> 13.08   +3.18
-      weeks 4-7      14.23 -> 13.01   +1.22
-      weeks 8-11     12.39 -> 12.85   -0.47
-      week 12+       13.78 -> 13.81   -0.03
+Walked forward, blend weights fitted on 2020-23 and scored on 2024-25:
 
-Large early, neutral once rolling form has something to say, faintly negative
-late. The blender could in principle do this by weighting two models, but a
-weighted average cannot learn WHEN to trust which; one model given both can.
+    preseason model alone                        14.098
+    this model alone, WITH preseason knowledge   12.928
+    this model alone, WITHOUT                    13.491
+    blend, this model WITHOUT   (ships)          12.602
+    blend, this model WITH                       12.743
+
+Clean separation wins by 0.14 and wins in every week band. The early-season
+weakness the preseason block was added to cure is the blender's job, and the
+blender does it: weeks 2-4 come out at 13.20 blended against 14.25 for this
+model alone.
+
+The general lesson is worth keeping. A component tuned in isolation can be
+genuinely improved and still leave the system worse. Changes here are judged on
+the blend, not on this model's own holdout.
 
 WHY THE SEASON RANGE STARTS AT 2017
 
@@ -211,7 +218,9 @@ def edit_files(games_df: pd.DataFrame,
     print(f"   joined pre-game form to {before:,} games; "
           f"{before - len(out):,} dropped for having no prior data "
           f"(season openers), leaving {len(out):,}")
-    return add_asof_adjusted(add_preseason_knowledge(out), games_df)
+    # add_preseason_knowledge is deliberately NOT called - see the module
+    # docstring. It improves this model and costs the blend 0.14 MAE.
+    return add_asof_adjusted(out, games_df)
 
 
 _HERE = os.path.dirname(os.path.abspath(__file__))

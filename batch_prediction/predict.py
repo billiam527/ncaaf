@@ -464,7 +464,10 @@ def is_merge_games_and_stats(games_df: pd.DataFrame,
 
     home_df = side(side(games_df, 'away_team_id', '_away'),
                    'home_team_id', '_home')
-    home_df = _add_preseason_block(home_df)
+    # _add_preseason_block is deliberately not called: the in-season model is
+    # trained without prior-season EPA or the position ratings, because the
+    # preseason model already carries them and the overlap costs the blend 0.14
+    # MAE. See model_training/in_season_model/preprocess.py.
     home_df = _add_asof_block(home_df)
 
     cols = ['id', 'date', 'week', 'short_name',
