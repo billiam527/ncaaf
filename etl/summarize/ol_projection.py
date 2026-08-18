@@ -71,6 +71,45 @@ came back null, measured on 2019-22 and confirmed on 2023-25:
 So the room grade is the only player-level information this unit has, which is
 part of why it earns a larger share here than anywhere else.
 
+PENALTIES: THE MOST STABLE THING HERE, AND IT DOES NOT HELP
+
+False starts and holding are as close to a pure line statistic as this data
+holds, and nothing in the rating touched them, so they were built from the play
+text and tested. They are genuinely stable - more stable than any blocking
+measure in the rating:
+
+  offensive penalties, all   0.570      adjusted line yards        0.510
+  false start                0.475      adjusted stuff rate        0.460
+  holding                    0.382      adjusted sack rate allowed 0.270
+
+Holding is a judgment call and repeats anyway, at about the level of opportunity
+rate. Subjective is not the same as random.
+
+None of it predicts. Carried forward against next season's offense each one
+sits between -0.014 and +0.029, and blended into the projection at any weight
+both the tuning and the holdout figures fall monotonically. Same-season, the
+strongest correlation any of them has with the line rating is -0.087. Stability
+and predictive value are simply different axes, and this is the cleanest example
+of it in the model.
+
+One trap worth naming, because it is tempting. Adding false starts raises
+agreement with Yahoo's published top 25 sharply, +0.378 to +0.541 at a weight of
+0.30, while prediction falls the whole way. The lists do appear to reward
+penalty discipline. Following that would be fitting the magazine rather than the
+football, and CBS's list moves the other way over the same range, so even the
+list evidence does not agree with itself.
+
+Parsing note for anyone who rebuilds this: ESPN's play text changes format
+twice, and a parser written for one era silently reads 0% of another. The three
+shapes are "TEAM penalty 5 yard false start accepted" through 2013, then
+"PENALTY TEAM false start 5 yards" with the penalty name lowercased through
+about 2020 and title-cased after, plus a "TEAM Penalty, Offensive Holding (10
+Yards)" variant in 2021-23 which usefully labels the side itself. Attribution
+must also be done within the game - matching the penalized name against a global
+alias map resolves about 70% and fails on the SAME teams every year, which turns
+"penalty rate" into "is this team's name resolvable" and fakes a year-over-year
+correlation of 0.81.
+
 Usage:
     python ol_projection.py --out results/ol_projection.csv
     python ol_projection.py --from-season 2026
