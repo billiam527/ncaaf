@@ -285,11 +285,16 @@ POSITION_FILE = os.path.normpath(os.path.join(
     '..', 'etl', 'summarize', 'results', 'position_ratings.csv'))
 
 # One rating per unit - quarterback, backfield, wideouts, tight ends, offensive
-# line, front seven, secondary - each from prior-season play blended with the
-# recruiting grade of the room as it now stands. Unlagged like returning
+# line, front seven, secondary, special teams - each from prior-season play
+# blended with the recruiting grade of the room as it now stands, except special
+# teams, which is carried kicking value alone. Unlagged like returning
 # production, because each is already stamped onto the season it describes.
+#
+# MUST match model_training/preseason_model/preprocess.py::POSITION_FEATURES.
+# A model trained on eight of these and asked to predict from seven will either
+# throw or silently mis-align its columns, depending on the estimator.
 POSITION_FEATURES = ['pf_qb', 'pf_rb', 'pf_wr', 'pf_te', 'pf_ol', 'pf_f7',
-                     'pf_db']
+                     'pf_db', 'pf_st']
 
 
 def _merge_by_team_season(stats_df, path, wanted):
