@@ -1,53 +1,85 @@
 #!/usr/bin/env python3
-"""Collect the six unit ratings into one preseason feature table.
+"""Collect the eight unit ratings into one preseason feature table.
 
-One row per team-season, six columns, every one of them knowable BEFORE that
+One row per team-season, eight columns, every one of them knowable BEFORE that
 season is played. This is the file the projection model joins.
 
 WHY THESE COLUMNS AND NOT THE OTHERS
 
-Each of the six source modules produces two things: a rating for a season that
-has been played, and a projection for the season that has not. Only the second
-can be a preseason feature. Using ol_rating for season S to predict games in
-season S would be feeding the model the answer.
+Each source module produces two things: a rating for a season that has been
+played, and a projection for the season that has not. Only the second can be a
+preseason feature. Using ol_rating for season S to predict games in season S
+would be feeding the model the answer.
 
     pf_qb   qb_projection.projected_z        grade blended with prior record
     pf_rb   rb_projection.backfield          top two backs
-    pf_wr   receiver_projection.projected_corps
+    pf_wr   receiver_projection.projected_wr wideouts alone
+    pf_te   receiver_projection.projected_te tight ends alone
     pf_ol   ol_projection.proj_ol_rating     S-1 blocking, S roster
     pf_f7   front_seven.proj_f7_rating       S-1 front play, S roster
     pf_db   defensive_backs.proj_db_rating   S-1 secondary play, S roster
+    pf_st   special_teams.proj_st_epaa       S-1 kicking, in points above
+                                             the average kick from that spot
 
 LEAKAGE CHECK, RUN ON EVERY COLUMN
 
 A preseason feature for season S must track season S-1 outcomes more closely
-than season S outcomes. If it tracks S better, it saw S. All six pass:
+than season S outcomes. If it tracks S better, it saw S. All eight pass:
 
-    pf_qb  vs pass offence   S-1 +0.481   S +0.413
-    pf_rb  vs rush offence   S-1 +0.571   S +0.439
-    pf_wr  vs pass offence   S-1 +0.507   S +0.434
-    pf_ol  vs rush offence   S-1 +0.771   S +0.496
-    pf_f7  vs defence        S-1 +0.800   S +0.574
-    pf_db  vs defence        S-1 +0.524   S +0.435
+    pf_qb  vs pass offence   S-1 +0.495   S +0.420
+    pf_rb  vs rush offence   S-1 +0.571   S +0.436
+    pf_wr  vs pass offence   S-1 +0.499   S +0.417
+    pf_te  vs pass offence   S-1 +0.283   S +0.250
+    pf_ol  vs rush offence   S-1 +0.642   S +0.468
+    pf_f7  vs defence        S-1 +0.797   S +0.584
+    pf_db  vs defence        S-1 +0.554   S +0.456
+    pf_st  vs its own figure S-1 +0.986   S +0.248
 
-The structural check agrees: all six are populated for 2026, which has not been
-played. A column that needed season S could not have a 2026 value at all.
+Special teams is checked against its own realised figure rather than a season
+summary column, because the season summariser never modelled kicking. Its S-1
+correlation is near one by construction - the feature IS last season's figure,
+standardized - and the S figure is simply how much special teams repeats.
+
+The structural check agrees: all eight are populated for 2026, which has not
+been played. A column that needed season S could not have a 2026 value at all.
 --check re-runs both tests.
 
 WHAT THEY ARE WORTH
 
-Differenced home minus away against actual margin over 6,135 games, 2017-2025,
-alongside prior-season adjusted EPA:
+Differenced home minus away against actual margin over 6,136 games, 2017-2025,
+alongside prior-season adjusted EPA. In sample, as this table used to be built,
+and then fitted on 2017-22 and scored on 2023-25, which is the figure to trust:
 
-    prior-season EPA alone      R2 0.226   MAE 14.36
-    position ratings alone      R2 0.255   MAE 14.10
-    both                        R2 0.270   MAE 13.96
+                                in sample        out of sample
+    prior-season EPA alone   R2 0.226  MAE 14.37   0.194  14.38
+    position ratings alone      0.257       14.09   0.260  13.84
+    both                        0.274       13.94   0.256  13.87
 
-so +0.044 R2 and 0.395 points of MAE on top of what the model already has. The
-value is concentrated rather than spread: dropping the front seven costs 0.0458
-R2 and dropping the line 0.0161, while quarterback, receiver and secondary cost
-0.0018 apiece. The six correlate 0.47 to 0.61 with one another - they all partly
-encode how good a programme is - so they do not add six features' worth.
+Two things in that table are worth staring at. The position ratings beat prior
+EPA outright out of sample, and adding prior EPA to them makes the model
+slightly WORSE - it is fitted on six seasons and does not travel. That is a
+model-level question and is left alone here.
+
+What each column is worth, dropped from the full model:
+
+                     in sample   out of sample
+    pf_f7              +0.0054       +0.0088
+    pf_ol              +0.0062       +0.0080
+    pf_rb              +0.0023       +0.0040
+    pf_st              +0.0016       +0.0023
+    pf_qb              +0.0011       +0.0014
+    pf_wr              +0.0004       +0.0007
+    pf_te              +0.0006       -0.0010
+    pf_db              +0.0008       -0.0011
+
+The value is concentrated in the two lines of scrimmage. Special teams is
+fourth, ahead of the quarterback, which is not where anyone would have guessed
+it. Tight end and secondary now cost NOTHING out of sample - dropping either
+slightly helps - which is a flag rather than an instruction; they are cheap to
+keep and the sign is well inside noise.
+
+The eight correlate 0.05 to 0.60 with one another. They all partly encode how
+good a programme is, so they do not add eight features' worth.
 
 Usage:
     python position_ratings.py --out results/position_ratings.csv
@@ -78,6 +110,7 @@ SOURCES = {
     'pf_ol': ('ol_projection.csv', 'proj_ol_rating', 'offensive line'),
     'pf_f7': ('front_seven.csv', 'proj_f7_rating', 'front seven'),
     'pf_db': ('defensive_backs.csv', 'proj_db_rating', 'secondary'),
+    'pf_st': ('special_teams.csv', 'proj_st_epaa', 'special teams'),
 }
 
 # outcome each feature should predict, for the leakage check
@@ -90,6 +123,11 @@ LEAK_TARGET = {
     'pf_f7': 'adjusted_epa_per_play_def',
     'pf_db': 'adjusted_epa_per_play_def',
 }
+
+# Special teams has no outcome in season_summaries to be checked against - the
+# season summariser never modelled kicking - so its leakage target is its own
+# realised figure, taken from the module that produces it.
+LEAK_ALT = {'pf_st': ('special_teams.csv', 'st_epaa')}
 
 
 def build():
@@ -118,11 +156,17 @@ def check(base):
     print("### leakage check: a preseason feature must track S-1, not S ###")
     print(f"  {'feature':<9}{'vs S-1':>9}{'vs S':>8}{'':>4}verdict")
     bad = 0
-    for feat, target in LEAK_TARGET.items():
-        if feat not in base.columns or target not in S.columns:
+    targets = {f: (S, t) for f, t in LEAK_TARGET.items()}
+    for feat, (fname, col) in LEAK_ALT.items():
+        path = os.path.join(RESULTS, fname)
+        if os.path.exists(path):
+            targets[feat] = (pd.read_csv(path, low_memory=False), col)
+    for feat, (src, target) in targets.items():
+        if feat not in base.columns or target not in src.columns:
             continue
-        cur = S[['team_id', 'season', target]].rename(columns={target: 'cur'})
-        prv = S[['team_id', 'season', target]].copy()
+        cur = src[['team_id', 'season', target]].rename(
+            columns={target: 'cur'})
+        prv = src[['team_id', 'season', target]].copy()
         prv['season'] += 1
         prv = prv.rename(columns={target: 'prev'})
         m = (base[['team_id', 'season', feat]]

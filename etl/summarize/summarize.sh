@@ -459,8 +459,10 @@ run_analysis() {
 # the whole rebuild. position_ratings is different: if it fails the model cannot
 # be trained, so the function returns non-zero.
 
+# special_teams reads only the play-by-play and games, so it belongs in the
+# first stage alongside the other producers. position_ratings consumes it.
 DERIVED_STAGE_1="havoc qb_production receiver_production rb_production
-                 ol_production drive_factors run_pass_ratio"
+                 ol_production drive_factors run_pass_ratio special_teams"
 DERIVED_STAGE_2="adjust_havoc talent_by_position returning_production
                  team_talent roster_talent qb_projection receiver_projection
                  rb_projection"
