@@ -70,10 +70,28 @@ Large early, neutral once rolling form has something to say, faintly negative
 late. The blender could in principle do this by weighting two models, but a
 weighted average cannot learn WHEN to trust which; one model given both can.
 
-Position ratings only cover about half the rows - they start in 2017 and need a
-roster that links to recruiting - so they are filled at the training median
-where missing rather than dropping the row, the same treatment returning
-production gets in the preseason model.
+WHY THE SEASON RANGE STARTS AT 2017
+
+The four skill-position ratings - quarterback, backfield, wideout, tight end -
+do not exist before 2017 at all; the line, front seven, secondary and special
+teams go back further. Training from 2010 meant 44% of rows carried sixteen
+median-filled position columns, teaching the model that "average everything" is
+the commonest roster in the country, which is an artefact rather than a fact.
+
+Measured on the 2025 holdout, the choice barely matters:
+
+    2010+, position filled        9,649 train   R2 0.327   MAE 13.141
+    2017+, residual gaps filled   5,466 train   R2 0.332   MAE 13.117
+    2017+, every value real       4,885 train   R2 0.336   MAE 13.210
+    2010+, no position block      9,649 train   R2 0.311   MAE 13.262
+
+The block is worth about 0.13 of MAE. Whether it is filled or the window is
+trimmed is worth 0.02, which is noise. 2017 is used because it is the honest
+window, not because it measurably wins.
+
+Note also that train_season_range was previously accepted and ignored -
+start_year and end_year were passed to edit_files and never referenced - so any
+range in the experiment file was decorative. It is applied now.
 """
 
 import os
@@ -143,6 +161,14 @@ def edit_files(games_df: pd.DataFrame,
     The join key is (game_id, team_id), not (season, team_id). That is the whole
     correction: the old key matched a game to its own season's final numbers.
     """
+    # The experiment file's train_season_range was accepted and then never
+    # applied - start_year and end_year arrived as arguments and were unused, so
+    # a file asking for 2015-2025 silently trained on 2010-2025.
+    before_range = len(games_df)
+    games_df = games_df[games_df['season'].between(start_year, end_year)]
+    print(f"   season range {start_year}-{end_year}: "
+          f"{before_range:,} games -> {len(games_df):,}")
+
     stats_df = rolling_df[['game_id', 'team_id'] + features]
 
     away_df = pd.merge(games_df, stats_df,
