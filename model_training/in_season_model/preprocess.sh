@@ -25,6 +25,22 @@ else
     aws s3 cp s3://ncaaf-data/model_data/season_summaries.csv temp/season_summaries.csv
 fi
 
+# The IN-SEASON model trains on ROLLING summaries, not season summaries. Season
+# summaries hold one row per team-season - end-of-year figures - and joining
+# them to a game played inside that season hands the model the result of the
+# game it is being asked to predict. See the docstring in preprocess.py.
+LOCAL_ROLLING=../../etl/summarize/results/rolling_summaries.csv
+if [ -f "$LOCAL_ROLLING" ]; then
+    cp "$LOCAL_ROLLING" temp/rolling_summaries.csv
+    printf "   rolling summaries from local ETL output (%s rows)\n" \
+        "$(( $(wc -l < temp/rolling_summaries.csv) - 1 ))"
+else
+    printf "ERROR: %s not found.\n" "$LOCAL_ROLLING"
+    printf "       The in-season model cannot be built without it, and season\n"
+    printf "       summaries are not a substitute - they leak the answer.\n"
+    exit 1
+fi
+
 file=$(python -c "import glob; print(glob.glob('temp/in_season_experiment*')[0])")
 
 FBS_ind=""

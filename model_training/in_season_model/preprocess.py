@@ -1,9 +1,82 @@
 # -*- coding: utf-8 -*-
-"""
-Created on Sat Jul 13 22:46:12 2024
+"""Build the in-season training frame from what had happened BEFORE each game.
 
-@author: wfish
+Created on Sat Jul 13 22:46:12 2024 by wfish.
+
+THIS FILE USED TO LEAK THE ANSWER
+
+edit_files() joined season_summaries onto games on (team_id, season) - the same
+season the game was played in. season_summaries holds one row per team-season,
+so those are END-OF-YEAR figures. Predicting a week 3 game handed the model both
+teams' full-season adjusted EPA, which includes the result of that very game and
+every game after it.
+
+It was not subtle in its effects, only in its appearance. The model beat the
+market by 1.08 points in week 1, before anyone had played a snap, and its
+accuracy did not improve as the season went on:
+
+                model MAE   market MAE
+    week 1          12.52        13.60      <- impossible without the answer
+    weeks 2-3       12.04        11.96
+    weeks 4-7       10.62        11.25
+    week 12+        12.03        13.17
+
+A real in-season model is at its worst in week 1 and improves as evidence
+accumulates. Flat-and-already-good is the signature of a leak. Every MAE this
+model has ever reported, and any blend weight fitted against it, was built on
+that.
+
+WHAT IT JOINS NOW
+
+rolling_summaries.csv, on (game_id, team_id). That file carries one row per team
+per game holding the rolling average of everything BEFORE it: a team's first
+game of a season is empty, since nothing has happened yet, and the figures
+correlate +0.26 with the margin of the game they precede - the modest number a
+genuine pre-game quantity shows. A figure containing the game would correlate
+far higher.
+
+Games with no prior data - every team's season opener - are dropped rather than
+filled. There is nothing to fill them with, and the blender already weights the
+preseason model heavily when few games have been played.
+
+ONE THING THIS COSTS
+
+The rolling figures are NOT opponent-adjusted; season_summaries' were. A team
+that has played three cupcakes will look better than it is until the schedule
+evens out. That is a real weakness and it is still enormously preferable to
+knowing the future. If it matters enough to fix, the adjustment would have to be
+computed as-of-each-week in etl/summarize rather than once per season.
+
+IT ALSO GETS WHAT WE KNEW BEFORE THE SEASON
+
+Rebuilt on rolling form alone the model had twelve columns and no memory: in
+week 2 it knew one game about each side and nothing else. Adding last season's
+opponent-adjusted EPA and the eight preseason position ratings is worth a lot,
+and worth it exactly where you would expect:
+
+    2025 holdout          R2     MAE
+      rolling only      0.256  13.724
+      + prior EPA       0.311  13.262
+      + position        0.331  13.268
+      + both            0.336  13.210
+
+    by week, rolling-only against both, MAE
+      weeks 2-3      16.26 -> 13.08   +3.18
+      weeks 4-7      14.23 -> 13.01   +1.22
+      weeks 8-11     12.39 -> 12.85   -0.47
+      week 12+       13.78 -> 13.81   -0.03
+
+Large early, neutral once rolling form has something to say, faintly negative
+late. The blender could in principle do this by weighting two models, but a
+weighted average cannot learn WHEN to trust which; one model given both can.
+
+Position ratings only cover about half the rows - they start in 2017 and need a
+roster that links to recruiting - so they are filled at the training median
+where missing rather than dropping the row, the same treatment returning
+production gets in the preseason model.
 """
+
+import os
 
 import pandas as pd
 import numpy as np
@@ -12,6 +85,10 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from pickle import dump
 import argparse
+
+# Seed for the train/test split. Overridable so a change can be scored on
+# several splits rather than trusting one.
+SPLIT_SEED = int(os.environ.get('SPLIT_SEED', '0'))
 
 
 def read_data(games_df_file_loc: str,
@@ -56,30 +133,94 @@ def read_data(games_df_file_loc: str,
 
 
 def edit_files(games_df: pd.DataFrame,
-               season_summary_df: pd.DataFrame,
+               rolling_df: pd.DataFrame,
                features: list,
                start_year: int,
                end_year: int
               ):
-    
-    stats_df = season_summary_df.reset_index()[['season', 'team_id'] + features]
-    
-    away_df = pd.merge(games_df, stats_df, left_on=['away_team_id', 'season'], right_on=['team_id', 'season'])
+    """Join each game to both teams' form as it stood BEFORE kickoff.
+
+    The join key is (game_id, team_id), not (season, team_id). That is the whole
+    correction: the old key matched a game to its own season's final numbers.
+    """
+    stats_df = rolling_df[['game_id', 'team_id'] + features]
+
+    away_df = pd.merge(games_df, stats_df,
+                       left_on=['id', 'away_team_id'],
+                       right_on=['game_id', 'team_id'])
     home_df = pd.merge(away_df, stats_df,
-                       left_on=['home_team_id', 'season'],
-                       right_on=['team_id', 'season'],
+                       left_on=['id', 'home_team_id'],
+                       right_on=['game_id', 'team_id'],
                        suffixes=('_away', '_home'))
-    
+
     keep_cols = []
     for i in features:
         for j in list(home_df):
-            if i in j:
+            if i in j and j not in keep_cols:
                 keep_cols.append(j)
-    
+
     other_cols = ['season', 'id', 'date', 'short_name',
-                  'away_team_id', 'home_team_id', 
+                  'away_team_id', 'home_team_id',
                   'status', 'home_score_differential']
-    return home_df[other_cols + keep_cols]
+    out = home_df[other_cols + keep_cols]
+    # a season opener has no prior form for one or both sides; there is nothing
+    # to fill it with, and the blender leans on the preseason model there anyway
+    before = len(out)
+    out = out.dropna(subset=keep_cols)
+    print(f"   joined pre-game form to {before:,} games; "
+          f"{before - len(out):,} dropped for having no prior data "
+          f"(season openers), leaving {len(out):,}")
+    return add_preseason_knowledge(out)
+
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+SUMMARIES = os.path.normpath(os.path.join(
+    _HERE, '..', '..', 'etl', 'summarize', 'results', 'season_summaries.csv'))
+POSITION_FILE = os.path.normpath(os.path.join(
+    _HERE, '..', '..', 'etl', 'summarize', 'results', 'position_ratings.csv'))
+PRIOR_FEATURES = ['adjusted_epa_per_play_off', 'adjusted_epa_per_play_def']
+
+
+def add_preseason_knowledge(df: pd.DataFrame) -> pd.DataFrame:
+    """Attach last season's adjusted EPA and this season's position ratings.
+
+    Both are lagged or preseason-stamped already, so neither can see the game.
+    Prior EPA is season S-1's, joined onto season S. The position ratings are
+    built by their own modules to stand before the season they name and are
+    checked for that by position_ratings.py --check.
+    """
+    if os.path.exists(SUMMARIES):
+        s = pd.read_csv(SUMMARIES, low_memory=False)
+        have = [c for c in PRIOR_FEATURES if c in s.columns]
+        prior = s[['team_id', 'season'] + have].copy()
+        prior['season'] += 1          # last season's figure, this season's row
+        df = _attach(df, prior, have, 'pri')
+    else:
+        print(f"   {SUMMARIES} missing; no prior-season EPA")
+
+    if os.path.exists(POSITION_FILE):
+        p = pd.read_csv(POSITION_FILE, low_memory=False)
+        pf = [c for c in p.columns if c.startswith('pf_')]
+        df = _attach(df, p[['team_id', 'season'] + pf], pf, 'pos')
+        cols = [c for c in df.columns if c.endswith('_pos')]
+        cov = df[cols].notna().all(axis=1).mean() if cols else 0
+        # filled rather than dropped: these start in 2017 and need a roster
+        # that links to recruiting records, so about half the rows lack them
+        df[cols] = df[cols].fillna(df[cols].median())
+        print(f"   position ratings on {cov:.1%} of games, "
+              f"rest filled at the median")
+    else:
+        print(f"   {POSITION_FILE} missing; no position ratings")
+    return df
+
+
+def _attach(df, src, cols, tag):
+    for side in ('home', 'away'):
+        s = src.rename(columns={c: f'{c}_{side}_{tag}' for c in cols})
+        df = df.merge(s, left_on=[f'{side}_team_id', 'season'],
+                      right_on=['team_id', 'season'], how='left')
+        df = df.drop(columns=['team_id'])
+    return df
 
 
 def split_data(data,
@@ -104,12 +245,19 @@ def split_data(data,
             X = season_data.drop(y_col, axis=1)
             y = season_data[y_col]
 
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test)
+            # Seeded, as in the preseason model. train_model.py fixes the
+            # ESTIMATOR's random_state but the split had none, so every run
+            # scored a different test set and two runs were never comparable.
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=test, random_state=SPLIT_SEED)
             train_dfs.append(pd.concat([pd.DataFrame(X_train), pd.DataFrame(y_train)], axis=1))
             test_dfs.append(pd.concat([pd.DataFrame(X_test), pd.DataFrame(y_test)], axis=1))
 
-        return pd.concat(train_dfs).drop('season', axis=1), \
-            pd.concat(test_dfs).drop('season', axis=1)
+        # 'status' was dropped in the year branch below but not here, so it
+        # survived as a feature on one path and not the other
+        drop = [c for c in ('season', 'status') if c in train_dfs[0].columns]
+        return pd.concat(train_dfs).drop(drop, axis=1), \
+            pd.concat(test_dfs).drop(drop, axis=1)
 
     # if test is an int that means that the input mustve been a year to holdout as test
     elif isinstance(test, int) is True:
@@ -175,13 +323,15 @@ if __name__ == '__main__':
         test,\
         fbs_only_ind, \
         algo = read_data(games_df_file_loc='temp/games.csv',
-            season_summary_df_file_loc='temp/season_summaries.csv',
+            season_summary_df_file_loc='temp/rolling_summaries.csv',
             experiment_info_txt_file_loc=experiment_info_txt_file_loc)
 
-    season_summaries_df.to_csv('temp/season_summaries_raw.csv')
+    # named season_summaries_df by history; it now holds ROLLING summaries,
+    # one row per team per game, carrying only what preceded that game
+    season_summaries_df.to_csv('temp/rolling_summaries_raw.csv')
 
     train_df = edit_files(games_df=games_df,
-                          season_summary_df=season_summaries_df,
+                          rolling_df=season_summaries_df,
                           features=features,
                           start_year=start_year,
                           end_year=end_year)
@@ -200,6 +350,13 @@ if __name__ == '__main__':
     for i in features:
         final_cols.append(i + '_home')
         final_cols.append(i + '_away')
+    # the preseason block is named <col>_<side>_pri / _pos rather than
+    # <col>_<side>, so it has to be picked up separately
+    extra = sorted(c for c in train_df.columns
+                   if c.endswith('_pri') or c.endswith('_pos'))
+    final_cols += extra
+    print(f"   {len(final_cols)} features: {len(final_cols) - len(extra)} "
+          f"rolling, {len(extra)} preseason")
 
     train_X_scaled, \
         test_X_scaled, \
