@@ -168,7 +168,9 @@ ROSTER_TALENT_FEATURES = []  # was ['blue_chip_ratio_pct', 'top22_rating_pct']
 # and the roster as it stands for the season being predicted. These are not the
 # recruiting-only position groups from talent_by_position.csv, which were tested
 # and added nothing; every column here is production, opponent-adjusted, blended
-# with the recruiting grade of the men actually in that room.
+# with the recruiting grade of the men actually in that room. The one exception
+# is pf_st, which has no recruiting half - there is no useful signing-day grade
+# for a kicker - and is carried production alone.
 #
 # They join unlagged, like returning production, because each is already stamped
 # onto the season it describes: the source modules take a played season's rating
@@ -185,16 +187,46 @@ ROSTER_TALENT_FEATURES = []  # was ['blue_chip_ratio_pct', 'top22_rating_pct']
 # than half the loss. Whatever returning production carries is spread across its
 # seven columns collectively and is still unaccounted for.
 #
-# Measured against margin over 6,135 games alongside prior-season adjusted EPA,
-# they are worth +0.044 R2 and 0.395 points of MAE - but unevenly. Dropping the
-# front seven costs 0.046 R2 and the line 0.016; quarterback, receiver and
-# secondary cost 0.002 apiece, and the six intercorrelate 0.47 to 0.61 because
-# they all partly encode how good a programme is.
+# Measured against margin over 6,136 games alongside prior-season adjusted EPA,
+# in sample R2 0.274 and MAE 13.94 against 0.226 and 14.37 for prior EPA alone.
+# Fitted on 2017-22 and scored on 2023-25 the eight are worth more than that
+# suggests: alone they reach R2 0.260 and MAE 13.84, BEATING prior-season EPA's
+# 0.194 and 14.38, and adding prior EPA on top makes it slightly worse. That is
+# a linear fit on differenced features and may not carry to the estimator here,
+# but it is worth knowing before trusting the EPA block above.
+#
+# Unevenly, as always. Dropping a column from the full model costs, out of
+# sample: front seven 0.0088, line 0.0080, backfield 0.0040, special teams
+# 0.0023, quarterback 0.0014, receiver 0.0007. Tight end and secondary cost
+# nothing - dropping either is very slightly better - which is a flag rather
+# than an instruction, since the signs sit inside noise and both are cheap.
+# The eight intercorrelate 0.05 to 0.60 because they all partly encode how good
+# a programme is.
+#
+# pf_st is kicking, valued in points above the average kick from the same spot,
+# carried forward a season. It is NOT a set of rates: raw field-goal percentage
+# repeats at 0.03 and hurts on its own. See etl/summarize/special_teams.py,
+# which also records why the pbp epa column cannot be used on kicks and why
+# team_id is not the kicking team.
+#
+# It is kept on weak evidence and the honest figures are these. In a linear fit
+# on differenced features with a 2023-25 temporal holdout it is clearly worth
+# something, +0.0023 R2, beating 100% of 400 noise placebos. In THIS estimator
+# it is not resolvable. Paired within split, twelve random splits give a mean
+# MAE change of -0.0068 (t = -0.59, better on 6 of 12); holding out one season
+# at a time gives -0.0013 (t = -0.08, better on 4 of 8). Consistently the right
+# sign, never significant. With 104 features and a model this heavily
+# regularised, a third of a point a game does not survive. Kept because the sign
+# never flips and it costs nothing, not because it was shown to help here.
+# Seed for the train/test split. Overridable so a change can be scored on
+# several splits rather than trusting one.
+SPLIT_SEED = int(os.environ.get('SPLIT_SEED', '0'))
+
 POSITION_FILE = os.path.normpath(
     os.path.join(_HERE, '..', '..', 'etl', 'summarize', 'results',
                  'position_ratings.csv'))
 POSITION_FEATURES = ['pf_qb', 'pf_rb', 'pf_wr', 'pf_te', 'pf_ol', 'pf_f7',
-                     'pf_db']
+                     'pf_db', 'pf_st']
 
 
 def add_returning_production(stats_df: pd.DataFrame,
@@ -303,7 +335,15 @@ def split_data(data,
             X = season_data.drop(y_col, axis=1)
             y = season_data[y_col]
 
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test)
+            # Seeded. train_model.py fixes the ESTIMATOR's random_state so a
+            # rerun reproduces the model, but the SPLIT was unseeded, so every
+            # run scored against a different 890-game test set. Two runs were
+            # therefore never comparable: rerunning an unchanged pipeline moved
+            # R2 by about 0.04 and MAE by 0.08 on split luck alone, which is
+            # larger than most changes anyone would make on purpose. Any
+            # before-and-after recorded before this line existed is suspect.
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=test, random_state=SPLIT_SEED)
             train_dfs.append(pd.concat([pd.DataFrame(X_train), pd.DataFrame(y_train)], axis=1))
             test_dfs.append(pd.concat([pd.DataFrame(X_test), pd.DataFrame(y_test)], axis=1))
 
