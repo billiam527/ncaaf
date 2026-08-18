@@ -82,7 +82,7 @@ def first_recruit_id(value):
     return str(parsed[0]) if isinstance(parsed, list) and parsed else None
 
 
-def room_members(size=ROOM_SIZE, rated_only=False):
+def room_members(size=ROOM_SIZE, rated_only=False, order='production'):
     """The five men, one row each, with their recruiting grade.
 
     Five because nickel is the base defence in this era, not four. As everywhere
@@ -99,6 +99,23 @@ def room_members(size=ROOM_SIZE, rated_only=False):
                          over three or four grades instead of five and makes it
                          noisier - worth -0.024 on the predictive criterion,
                          more than a standard error, for no gain against Steele.
+
+    The ORDER splits the same way, which was not obvious and cost real accuracy
+    to miss. Ordering the room by production was the fix that put Leonard Moore
+    in his own secondary, and it was applied to the recruiting grade as well,
+    where it is wrong:
+
+        grade by    terms by      predicts   vs Steele's 68   Notre Dame
+        production  production      0.328         +0.728          3rd
+        rating      production      0.340         +0.770          1st
+        rating      rating          0.323         +0.676          4th
+        production  rating          0.305         +0.619          4th
+
+    The grade asks how much talent a room holds, which the most talented men
+    answer. The carry and career terms ask who is on the field, which the most
+    productive answer. So order='rating' for the grade, order='production' for
+    the player terms - and the room the page displays stays production-ordered,
+    because that question is 'who plays', not 'who was signed'.
     """
     roster = pd.read_csv(os.path.join(PLAYER_DIR, 'cfbd_roster.csv'),
                          low_memory=False)
@@ -147,7 +164,9 @@ def room_members(size=ROOM_SIZE, rated_only=False):
     r = r.merge(prior_production(), on=['pid', 'season'], how='left')
     r['played'] = r['prod_events'].notna().astype(int)
     r['prod_events'] = r['prod_events'].fillna(0.0)
-    return (r.sort_values(['played', 'prod_events', 'rating'], ascending=False)
+    keys = (['rating'] if order == 'rating'
+            else ['played', 'prod_events', 'rating'])
+    return (r.sort_values(keys, ascending=False)
              .groupby(['team_id', 'season']).head(size)
              [['team_id', 'season', 'pid', 'rating', 'played']])
 
@@ -161,7 +180,7 @@ def secondary_room(size=ROOM_SIZE):
     somewhere else, by their coverage carry, which is the number that knows
     what they actually did.
     """
-    top = room_members(size, rated_only=True)
+    top = room_members(size, rated_only=True, order='rating')
     out = top.groupby(['team_id', 'season'], as_index=False).agg(
         DB_rating_top=('rating', 'mean'),      # skips NaN
         DB_n=('rating', 'count'),              # count is rated members only
@@ -611,7 +630,9 @@ def main():
     # rule prefers are the ones that agree with the published preseason room
     # rankings - against Phil Steele's 2026 top 68, Spearman +0.751 here against
     # +0.685 at the unconstrained peak, for 0.016 of correlation.
-    se = (1 - top[0] ** 2) / np.sqrt(top[5])
+    # Half a standard error, not a whole one - see front_seven.py, where a full
+    # band chose a mix that was worse on both criteria at once.
+    se = 0.5 * (1 - top[0] ** 2) / np.sqrt(top[5])
     close = [g for g in grid if g[0] >= top[0] - se]
     r, cover_share, cov_share, car_share, rec_share, nb2, tidx = min(
         close, key=lambda g: (round(g[4], 4), -g[0]))
