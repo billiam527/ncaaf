@@ -465,6 +465,7 @@ def is_merge_games_and_stats(games_df: pd.DataFrame,
     home_df = side(side(games_df, 'away_team_id', '_away'),
                    'home_team_id', '_home')
     home_df = _add_preseason_block(home_df)
+    home_df = _add_asof_block(home_df)
 
     cols = ['id', 'date', 'week', 'short_name',
             'season', 'status',
@@ -478,7 +479,8 @@ def is_merge_games_and_stats(games_df: pd.DataFrame,
         feature_cols.append(i + '_home')
         feature_cols.append(i + '_away')
     feature_cols += sorted(c for c in home_df.columns
-                           if c.endswith('_pri') or c.endswith('_pos'))
+                           if c.endswith('_pri') or c.endswith('_pos')
+                           or c.endswith('_adj'))
 
     missing = [c for c in feature_cols if c not in home_df.columns]
     if missing:
@@ -490,7 +492,14 @@ def is_merge_games_and_stats(games_df: pd.DataFrame,
 
     home_df = home_df[cols + feature_cols]
 
-    return home_df.dropna(), home_df.dropna()[feature_cols]
+    # Only the non-adjusted features are required. The as-of-week block is NaN
+    # by design before week 5 and wherever the adjustment could not be built,
+    # and the model is trained to expect that - dropping those rows would refuse
+    # to predict precisely the early-season games the fallback exists for. It
+    # cost 270 of 904 games on 2025 before this was split out.
+    required = [c for c in feature_cols if not c.endswith('_adj')]
+    keep = home_df.dropna(subset=required)
+    return keep, keep[feature_cols]
 
 
 def _add_preseason_block(df: pd.DataFrame) -> pd.DataFrame:
@@ -528,6 +537,66 @@ def _add_preseason_block(df: pd.DataFrame) -> pd.DataFrame:
         cols = [c for c in df.columns if c.endswith('_pos')]
         df[cols] = df[cols].fillna(df[cols].median())
     return df
+
+
+# The adjustment is untrustworthy on two weeks of games; the model is trained
+# with it withheld before this week. Must match
+# model_training/in_season_model/preprocess.py::ASOF_FROM_WEEK.
+ASOF_FROM_WEEK = 5
+
+
+def _add_asof_block(df: pd.DataFrame) -> pd.DataFrame:
+    """Opponent-adjusted form as of the game's week.
+
+    For a week already played the row keyed to it exists. For an upcoming week
+    it does not, so the most recent week built for that season is carried
+    forward - the same fallback the rolling block uses, and the same thing a
+    person means by "how good they have looked so far".
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.normpath(os.path.join(
+        here, '..', 'etl', 'summarize', 'results', 'asof_adjusted.csv'))
+    if not os.path.exists(path):
+        print(f"  as-of-week adjustment not found at {path}")
+        return df
+
+    a = pd.read_csv(path, low_memory=False)
+    acols = [c for c in a.columns if c.startswith('adjusted_')]
+    latest = (a.sort_values('week_num')
+              .groupby(['season', 'team_id'], as_index=False).last())
+
+    def wknum(w):
+        w = str(w)
+        if w.strip().lower().startswith('week'):
+            tail = w.split()[-1]
+            if tail.isdigit():
+                return int(tail)
+        return 90
+
+    df = df.copy()
+    df['_wk'] = df['week'].map(wknum)
+    for s in ('home', 'away'):
+        ren = {c: f'{c}_{s}_adj' for c in acols}
+        df = df.merge(a.rename(columns=ren),
+                      left_on=[f'{s}_team_id', 'season', '_wk'],
+                      right_on=['team_id', 'season', 'week_num'],
+                      how='left').drop(
+                          columns=[c for c in ('team_id', 'week_num')
+                                   if c in df.columns or True], errors='ignore')
+        fb = latest.rename(columns={c: f'{c}_{s}_fb' for c in acols})
+        df = df.merge(fb[['season', 'team_id']
+                         + [f'{c}_{s}_fb' for c in acols]],
+                      left_on=[f'{s}_team_id', 'season'],
+                      right_on=['team_id', 'season'], how='left').drop(
+                          columns=['team_id'], errors='ignore')
+        for c in acols:
+            tgt, src = f'{c}_{s}_adj', f'{c}_{s}_fb'
+            if tgt in df.columns and src in df.columns:
+                df[tgt] = df[tgt].fillna(df[src])
+                df = df.drop(columns=[src])
+    cols = [c for c in df.columns if c.endswith('_adj')]
+    df.loc[df['_wk'] < ASOF_FROM_WEEK, cols] = np.nan
+    return df.drop(columns=['_wk'])
     
 # Predict games
 def predict_games(scaler,

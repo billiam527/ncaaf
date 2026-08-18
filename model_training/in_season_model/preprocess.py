@@ -39,13 +39,28 @@ Games with no prior data - every team's season opener - are dropped rather than
 filled. There is nothing to fill them with, and the blender already weights the
 preseason model heavily when few games have been played.
 
-ONE THING THIS COSTS
+IT ALSO GETS THE ADJUSTMENT, AS OF EACH WEEK
 
-The rolling figures are NOT opponent-adjusted; season_summaries' were. A team
-that has played three cupcakes will look better than it is until the schedule
-evens out. That is a real weakness and it is still enormously preferable to
-knowing the future. If it matters enough to fix, the adjustment would have to be
-computed as-of-each-week in etl/summarize rather than once per season.
+The rolling figures are not opponent-adjusted, so three games against weak
+defences read as three good games. etl/summarize/asof_adjusted.py supplies the
+missing third table: opponent-adjusted, computed only from games played before
+each week. Both blocks are given to the model rather than one replacing the
+other.
+
+    2025 holdout
+      rolling only                     R2 0.332   MAE 13.117
+      + as-of-week adjusted            R2 0.346   MAE 12.972
+      + as-of-week adjusted, gated     R2 0.351   MAE 12.929
+
+The adjusted block is WITHHELD before week 5. A ridge fitted on two weeks of
+football is mostly noise and the estimator cannot tell that from signal - given
+it in weeks 2-3 it uses it and loses 0.47 of MAE there against plain rolling
+form. Withholding lets it fall back on unadjusted form exactly while the
+adjustment is untrustworthy, and recovers those weeks from 13.30 to 12.98. Weeks
+4 through 7 were swept; 5 wins.
+
+Gaps are left as NaN rather than filled. XGBoost learns a default direction per
+split, so a missing adjustment is information rather than a hole.
 
 IT ALSO GETS WHAT WE KNEW BEFORE THE SEASON
 
@@ -196,7 +211,7 @@ def edit_files(games_df: pd.DataFrame,
     print(f"   joined pre-game form to {before:,} games; "
           f"{before - len(out):,} dropped for having no prior data "
           f"(season openers), leaving {len(out):,}")
-    return add_preseason_knowledge(out)
+    return add_asof_adjusted(add_preseason_knowledge(out), games_df)
 
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -204,7 +219,47 @@ SUMMARIES = os.path.normpath(os.path.join(
     _HERE, '..', '..', 'etl', 'summarize', 'results', 'season_summaries.csv'))
 POSITION_FILE = os.path.normpath(os.path.join(
     _HERE, '..', '..', 'etl', 'summarize', 'results', 'position_ratings.csv'))
+ASOF_FILE = os.path.normpath(os.path.join(
+    _HERE, '..', '..', 'etl', 'summarize', 'results', 'asof_adjusted.csv'))
 PRIOR_FEATURES = ['adjusted_epa_per_play_off', 'adjusted_epa_per_play_def']
+
+# The opponent adjustment is not trustworthy before this week; see the module
+# docstring. Withheld rather than filled, so the model falls back on rolling.
+ASOF_FROM_WEEK = 5
+
+
+def _week_num(w):
+    w = str(w)
+    if w.strip().lower().startswith('week'):
+        tail = w.split()[-1]
+        if tail.isdigit():
+            return int(tail)
+    return 90
+
+
+def add_asof_adjusted(df: pd.DataFrame, games_df: pd.DataFrame) -> pd.DataFrame:
+    """Opponent-adjusted form as it stood before each game's week."""
+    if not os.path.exists(ASOF_FILE):
+        print(f"   {ASOF_FILE} missing; no as-of-week adjustment. Build it "
+              f"with etl/summarize/asof_adjusted.py")
+        return df
+    wk = games_df[['id', 'week']].copy()
+    wk['week_num'] = wk['week'].map(_week_num)
+    df = df.merge(wk[['id', 'week_num']], on='id', how='left')
+
+    a = pd.read_csv(ASOF_FILE, low_memory=False)
+    acols = [c for c in a.columns if c.startswith('adjusted_')]
+    for side in ('home', 'away'):
+        r = a.rename(columns={c: f'{c}_{side}_adj' for c in acols})
+        df = df.merge(r, left_on=[f'{side}_team_id', 'season', 'week_num'],
+                      right_on=['team_id', 'season', 'week_num'], how='left')
+        df = df.drop(columns=['team_id'])
+    cols = [c for c in df.columns if c.endswith('_adj')]
+    df.loc[df['week_num'] < ASOF_FROM_WEEK, cols] = np.nan
+    have = df[cols].notna().all(axis=1).mean()
+    print(f"   as-of-week adjustment on {have:.1%} of games "
+          f"(withheld before week {ASOF_FROM_WEEK}); gaps left as NaN")
+    return df
 
 
 def add_preseason_knowledge(df: pd.DataFrame) -> pd.DataFrame:
@@ -376,13 +431,16 @@ if __name__ == '__main__':
     for i in features:
         final_cols.append(i + '_home')
         final_cols.append(i + '_away')
-    # the preseason block is named <col>_<side>_pri / _pos rather than
-    # <col>_<side>, so it has to be picked up separately
+    # the preseason and as-of-week blocks are named <col>_<side>_pri / _pos /
+    # _adj rather than <col>_<side>, so they are picked up separately. Order
+    # matters: the scaler and estimator index by position, not by name.
     extra = sorted(c for c in train_df.columns
-                   if c.endswith('_pri') or c.endswith('_pos'))
+                   if c.endswith('_pri') or c.endswith('_pos')
+                   or c.endswith('_adj'))
     final_cols += extra
+    n_adj = sum(c.endswith('_adj') for c in extra)
     print(f"   {len(final_cols)} features: {len(final_cols) - len(extra)} "
-          f"rolling, {len(extra)} preseason")
+          f"rolling, {len(extra) - n_adj} preseason, {n_adj} as-of-week")
 
     train_X_scaled, \
         test_X_scaled, \

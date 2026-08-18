@@ -466,7 +466,10 @@ DERIVED_STAGE_1="havoc qb_production receiver_production rb_production
 DERIVED_STAGE_2="adjust_havoc talent_by_position returning_production
                  team_talent roster_talent qb_projection receiver_projection
                  rb_projection"
-DERIVED_STAGE_3="ol_projection front_seven"
+# asof_adjusted reads game_by_game_summaries, which the core summarizer writes
+# before any of these stages run. It is the slowest thing here - it refits the
+# opponent adjustment once per season-week, about six minutes for ten seasons.
+DERIVED_STAGE_3="ol_projection front_seven asof_adjusted"
 DERIVED_STAGE_4="defensive_backs"
 DERIVED_STAGE_5="position_ratings"
 
