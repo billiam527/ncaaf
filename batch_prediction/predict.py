@@ -1,3 +1,38 @@
+"""Score scheduled games with the preseason model, the in-season model, or both.
+
+WHAT THESE NUMBERS ARE WORTH AGAINST THE MARKET
+
+Measured by walking forward - every season from 2019 on predicted by a model
+trained only on the seasons before it - and joined to CFBD's lines, 5,115 games:
+
+    window      games   model   close    open      gap   we're closer    ATS
+    week 1        546   14.50   12.12   12.41    +2.38      37.7%      48.7%
+    weeks 1-3   1,152   14.11   12.28   12.43    +1.83      39.6%      48.5%
+    weeks 4-7   1,361   13.33   11.97   11.92    +1.36      42.8%      51.2%
+    week 8+     2,602   14.35   12.31   12.36    +2.03      41.0%      49.8%
+    all         5,115   14.02   12.21   12.26    +1.81      41.2%      49.9%
+
+The intuition that the preseason model should be MOST competitive early, before
+the market has seen anyone play, is wrong. The gap is widest in week 1 and the
+against-the-spread record never reaches the 52.4% that breaks even at -110. It
+is not a small-sample effect: weeks 1-3 come in at 41-52% ATS in each of the
+seven seasons individually and average 48.5% with a standard error of 1.5%.
+
+The reason is that the market's week-1 information is a strict superset of ours.
+It has the same offseason we do, plus injuries, suspensions, portal movement and
+the aggregated opinion of everyone else. The opening line already beats us by
+2.09 points in week 1 and improves only 0.29 more by kickoff, so almost none of
+the market's advantage is in-season learning.
+
+The compression in these predictions is not a bug either. Their standard
+deviation is 10.84 against the market's 13.11 and an actual 20.18, a slope of
+0.640 regressed on the market, but stretching them to a slope of 1.0 makes MAE
+strictly worse (13.99 to 15.13) and does not improve the ATS record. It is
+correct hedging on limited information.
+
+Treat these as an input to the blend and to the in-season model, not as a
+standalone betting signal.
+"""
 import pandas as pd
 import numpy as np
 import argparse
