@@ -119,36 +119,83 @@ def name_keys(name):
     return keys
 
 
-def roster_lookup():
-    """(season, team_id, name key) -> (player id, name, position)."""
+def roster_lookup(prefer=('QB',)):
+    """(season, team_id, name key) -> (player id, name, position).
+
+    WHO WINS A COLLISION DEPENDS ON WHO IS ASKING
+
+    Two team-mates sharing a surname and a first initial collapse to one key,
+    and the loser's plays are attributed to the winner. This used to resolve in
+    favour of the quarterback always, "since that is the position being
+    attributed" - true when qb_production calls it, false for the three other
+    modules that import the same map to attribute targets, carries and tackles.
+
+    Oregon 2025 is the case: Dakorien Moore (WR) and Dante Moore (QB) share
+    ('moore', 'd'), the quarterback won, and receiver_production credited Dante
+    Moore with 53 targets and 497 receiving yards - which is Dakorien's line
+    exactly. One of the ten best receivers in the country was absent from the
+    file. Fifty-four keys and 111 players are affected across the seasons held,
+    and it is getting worse rather than better: two keys in 2023, four in 2024,
+    eight in 2025.
+
+    So `prefer` is the caller's own position group.
+
+    COMPOUND SURNAMES NEED ALIASES
+
+    norm() strips punctuation, so a roster surname of "Coleman-Williams" keys
+    as ('colemanwilliams', 'r') while the play text says "Ryan Williams" and
+    keys as ('williams', 'r'). Alabama's Ryan Williams - 33 completions in the
+    2025 text, 865 receiving yards in 2024 by the box score - resolved to
+    nothing at all and had no row in receiver_production.
+
+    Each component of a multi-part surname is therefore registered as an alias,
+    but only where no player already holds that key outright. A real Williams
+    always beats an aliased Coleman-Williams.
+    """
     roster = pd.read_csv(os.path.join(PLAYER_DIR, 'cfbd_roster.csv'),
                          low_memory=False)
     teams = pd.read_csv(TEAMS)
     name_to_id = dict(zip(teams['location'], teams['id']))
     roster['tid'] = roster['team'].map(name_to_id)
-    roster = roster.dropna(subset=['tid', 'lastName'])
+    roster = roster.dropna(subset=['tid', 'lastName', 'season'])
 
-    surname = roster['lastName'].map(
-        lambda s: ''.join(norm(x) for x in re.split(r"[.\s]+", str(s))
-                          if norm(x) and norm(x) not in SUFFIX))
-    initial = roster['firstName'].map(lambda s: norm(s)[:1])
-    roster['k'] = list(zip(surname, initial))
+    def parts(s):
+        return [norm(x) for x in re.split(r"[-.\s]+", str(s))
+                if norm(x) and norm(x) not in SUFFIX]
 
-    # A quarterback wins any collision on surname-plus-initial, since that is
-    # the position being attributed; failing that the first row in roster order
-    # wins. Done with a stable sort and drop_duplicates rather than by walking
-    # the groups: there are a quarter of a million of them, and materialising a
-    # sub-frame for each cost 142 seconds per call - paid three times a pipeline
-    # run, because qb, receiver and rb production all need this map.
-    roster = roster.dropna(subset=['season'])
-    roster['_qb'] = (roster['position'] == 'QB').astype(np.int8)
-    pick = (roster.sort_values('_qb', ascending=False, kind='stable')
+    roster['_parts'] = roster['lastName'].map(parts)
+    roster['_sur'] = roster['_parts'].map(''.join)
+    roster['_ini'] = roster['firstName'].map(lambda s: norm(s)[:1])
+    roster['k'] = list(zip(roster['_sur'], roster['_ini']))
+
+    # Stable sort and drop_duplicates rather than walking the groups: there are
+    # a quarter of a million of them, and materialising a sub-frame for each
+    # cost 142 seconds per call - paid four times a pipeline run.
+    roster['_pref'] = roster['position'].isin(prefer).astype(np.int8)
+    pick = (roster.sort_values('_pref', ascending=False, kind='stable')
                   .drop_duplicates(subset=['season', 'tid', 'k'], keep='first'))
     names = (pick['firstName'].fillna('').astype(str) + ' '
              + pick['lastName'].fillna('').astype(str))
-    return dict(zip(
+    out = dict(zip(
         zip(pick['season'].astype(int), pick['tid'].astype(int), pick['k']),
         zip(pick['id'].astype(str), names, pick['position'])))
+
+    # aliases for compound surnames, added only where the key is still free
+    comp = roster[roster['_parts'].map(len) > 1].copy()
+    if len(comp):
+        comp = comp.explode('_parts')
+        comp['k'] = list(zip(comp['_parts'], comp['_ini']))
+        comp = (comp.sort_values('_pref', ascending=False, kind='stable')
+                    .drop_duplicates(subset=['season', 'tid', 'k'],
+                                     keep='first'))
+        cn = (comp['firstName'].fillna('').astype(str) + ' '
+              + comp['lastName'].fillna('').astype(str))
+        for key, val in zip(
+                zip(comp['season'].astype(int), comp['tid'].astype(int),
+                    comp['k']),
+                zip(comp['id'].astype(str), cn, comp['position'])):
+            out.setdefault(key, val)
+    return out
 
 
 def collect_plays(seasons_by_game, lookup):

@@ -393,7 +393,9 @@ def main():
                                games['season'].astype(int)))
 
     print("building the roster map...")
-    lookup = roster_lookup()
+    # defenders win a surname collision here - this module attributes tackles,
+    # sacks and breakups, so a quarterback should never take one
+    lookup = roster_lookup(prefer=tuple(DB_POSITIONS | FRONT_POSITIONS))
     print("reading the play-by-play...")
     ev = collect(seasons_by_game, lookup, games)
 

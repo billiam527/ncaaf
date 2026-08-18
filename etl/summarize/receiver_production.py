@@ -285,7 +285,10 @@ def main():
                                games['season'].astype(int)))
 
     print("building the roster lookup...")
-    lookup = roster_lookup()
+    # receivers win a surname collision here, not quarterbacks - this module
+    # attributes targets. Oregon's Dakorien Moore lost 53 targets and 497 yards
+    # to Dante Moore under the old rule.
+    lookup = roster_lookup(prefer=('WR', 'TE'))
     print("reading the play-by-play...")
     d = collect(seasons_by_game, lookup)
     d['season'] = d['season'].astype(int)

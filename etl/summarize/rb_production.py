@@ -225,7 +225,9 @@ def main():
                                games['season'].astype(int)))
 
     print("building the roster lookup...")
-    lookup = roster_lookup()
+    # backs win a surname collision here - this module attributes carries and
+    # backfield targets, not passes
+    lookup = roster_lookup(prefer=('RB', 'FB'))
     print("reading the play-by-play...")
     d = collect(seasons_by_game, lookup)
     d['season'] = d['season'].astype(int)
