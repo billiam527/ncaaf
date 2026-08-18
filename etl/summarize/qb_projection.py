@@ -94,19 +94,37 @@ def first_recruit_id(value):
     return None
 
 
-def career_to_date(prod, before):
-    """Play-weighted mean z over every season strictly before `before`.
+# How much a season is discounted for each year of age. Chosen on 2018-2022 and
+# confirmed on 2023-2025 before being wired in: correlation with the season
+# being projected goes 0.469 undecayed, 0.477, 0.484, 0.490, 0.492 across
+# 1.00 / 0.85 / 0.70 / 0.55 / 0.40, and the tuning seasons peak at 0.70.
+RECENCY_DECAY = 0.70
+
+
+def career_to_date(prod, before, decay=RECENCY_DECAY):
+    """Weighted mean z over every season strictly before `before`.
 
     Weighted by snaps so a 500-play season counts for more than a 110-play one,
-    which is the same reason the havoc adjustment weights by its denominator.
+    which is the same reason the havoc adjustment weights by its denominator -
+    and by recency, so a season two years old counts about half as much per
+    play as last season.
+
+    The recency term is not cosmetic. Oregon's Dante Moore threw for a z of
+    +0.38 in 2025, better than Arch Manning's +0.24, but his prior_z came out
+    lower because nine games as a true freshman at UCLA in 2023, at -0.01, were
+    pooled in at full weight. Both published 2026 lists have him top ten; this
+    module had him 25th. Undecayed, a quarterback is judged partly on a team he
+    no longer plays for and a body he no longer has.
     """
     h = prod[prod['season'] < before]
     h = h[h['plays'] >= MIN_PRIOR_PLAYS]
     if h.empty:
         return pd.DataFrame(columns=['pid', 'prior_z', 'prior_plays'])
-    g = h.assign(_w=h['z'] * h['plays']).groupby('pid')
-    out = g.agg(_num=('_w', 'sum'), prior_plays=('plays', 'sum')).reset_index()
-    out['prior_z'] = out['_num'] / out['prior_plays']
+    h = h.assign(_w=h['plays'] * decay ** (before - 1 - h['season']))
+    g = h.assign(_n=h['z'] * h['_w']).groupby('pid')
+    out = g.agg(_num=('_n', 'sum'), _den=('_w', 'sum'),
+                prior_plays=('plays', 'sum')).reset_index()
+    out['prior_z'] = out['_num'] / out['_den']
     return out[['pid', 'prior_z', 'prior_plays']]
 
 
