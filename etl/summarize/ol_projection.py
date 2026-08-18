@@ -25,6 +25,48 @@ rating because pass protection is real, but it is not allowed to dominate, and
 the run-blocking and pass-protection halves are also reported separately so the
 distinction stays visible.
 
+The quarterback half of that claim has now been measured rather than borrowed,
+by splitting consecutive team pairs on whether the same man actually took the
+snaps. He matters, and less than the sentence above implies:
+
+                        kept him   replaced     gap
+  sack rate                0.422      0.231   +0.191
+  adjusted sack rate       0.419      0.265   +0.154
+  adjusted line yards      0.527      0.439   +0.087   <- control
+
+Line yards is the control, because run blocking should not care who is at
+quarterback; the gap it shows is general roster continuity, which teams that
+keep a starter also tend to have. Net of it the quarterback is worth about a
+tenth of the repeatability of sack rate. Real, and not the dominant term.
+
+Only about 29% of the spread in sack rate between teams is counting noise, so
+the ceiling on year-over-year repeatability is roughly 0.71 and the observed
+0.30 is genuine year-to-year change rather than a small-sample artifact.
+Shrinking the measure would not recover it.
+
+ADJUSTING FOR THE QUARTERBACK DOES NOT PAY, AND HERE IS THE CONTROL
+
+Given all that, the obvious move is to discount carried pass protection when the
+starter changes - two thirds of teams - since part of what is being carried has
+left. It appears to work: the holdout goes 0.250 to 0.256, best at a discount of
+zero, meaning throw the carried figure away entirely.
+
+It does not survive its control. Simply raising the run share to 0.90 and
+touching nothing else gives the same 0.256, and once the run share is set there
+the quarterback rule is worth a further 0.002. The discount was not removing a
+quarterback, it was downweighting pass protection by the back door. The reverse
+test agrees: letting protection carry MORE when the starter stays is flat to
+negative at every multiplier tried.
+
+Subtracting the departing quarterback's own sack propensity, estimated from his
+other seasons, is worse still - it falls monotonically. Two thirds of those other
+seasons are at the same school behind the same line, so the estimate is partly
+the line being subtracted from itself.
+
+The run share is left at 0.75 regardless. Everything from 0.75 to 1.00 sits
+inside half a standard error of the tuning peak, so the data does not actually
+distinguish them and moving it would be false precision.
+
 THE PROJECTION IS MIXED SEPARATELY FROM THE RATING
 
 There are two mixes here, not one, and an earlier version fitted the first and
