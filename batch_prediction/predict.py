@@ -422,48 +422,112 @@ def is_merge_games_and_stats(games_df: pd.DataFrame,
                              stats_df: pd.DataFrame,
                              is_features: list):
     
-    # Mirror how the in-season model was trained. See
-    # model_training/in_season_model/preprocess.py::edit_files - it merges
-    # season-level adjusted stats on team_id + season with no date component.
-    # This previously joined on date as well and looked for
-    # <feature>_rolling_median_* columns, which nothing in the pipeline has ever
-    # produced, so the join could not succeed and the trained model would have
-    # been fed a differently-shaped frame even if it had.
+    # Mirrors how the in-season model is trained. See
+    # model_training/in_season_model/preprocess.py::edit_files.
+    #
+    # It used to merge season-level stats on team_id + season with no date
+    # component, deliberately matching a training routine that did the same. The
+    # training routine was wrong: season summaries are END-OF-YEAR figures, so
+    # joining them to a game inside that season fed the model the result of the
+    # game it was predicting. That is fixed there and has to be fixed here too,
+    # or the model is handed a frame it was never trained on.
+    #
+    # stats_df is now rolling_summaries: one row per team per game, holding only
+    # what preceded it. For a game that has been PLAYED the row keyed to that
+    # game is the right one. For one that has not, there is no such row, so each
+    # team's most recent completed game is carried forward - which is exactly
+    # what "form going into this week" means.
     games_df = games_df[['id', 'week', 'date', 'season', 'short_name', 'status',
                      'away_team_id', 'home_team_id']]
 
-    stats_cols = ['season', 'team_id'] + [f for f in is_features if f in stats_df.columns]
-    stats_df = stats_df.reset_index(drop=True)[stats_cols]
+    feats = [f for f in is_features if f in stats_df.columns]
+    stats_df = stats_df.reset_index(drop=True)
+    latest = (stats_df.sort_values('date')
+              .groupby('team_id', as_index=False).last()[['team_id'] + feats])
 
-    away_df = pd.merge(games_df, stats_df,
-                       left_on=['away_team_id', 'season'],
-                       right_on=['team_id', 'season'])
+    def side(df, team_col, suffix):
+        by_game = stats_df[['game_id', 'team_id'] + feats]
+        out = df.merge(by_game, left_on=['id', team_col],
+                       right_on=['game_id', 'team_id'], how='left')
+        out = out.drop(columns=[c for c in ('game_id', 'team_id')
+                                if c in out.columns])
+        # unplayed games fall back to the team's latest completed game
+        out = out.merge(latest, left_on=team_col, right_on='team_id',
+                        how='left', suffixes=('', '_fallback'))
+        for f in feats:
+            fb = f + '_fallback'
+            if fb in out.columns:
+                out[f] = out[f].fillna(out[fb])
+                out = out.drop(columns=[fb])
+        out = out.drop(columns=[c for c in ('team_id',) if c in out.columns])
+        return out.rename(columns={f: f + suffix for f in feats})
 
-    home_df = pd.merge(away_df, stats_df,
-                       left_on=['home_team_id', 'season'],
-                       right_on=['team_id', 'season'],
-                       suffixes=('_away', '_home'))
+    home_df = side(side(games_df, 'away_team_id', '_away'),
+                   'home_team_id', '_home')
+    home_df = _add_preseason_block(home_df)
 
     cols = ['id', 'date', 'week', 'short_name',
             'season', 'status',
             'home_team_id', 'away_team_id']
 
+    # Column ORDER has to match preprocess.py::__main__ exactly - rolling pairs
+    # in feature order, then the preseason block sorted - because the scaler and
+    # the estimator both index by position, not by name.
     feature_cols = []
     for i in is_features:
         feature_cols.append(i + '_home')
         feature_cols.append(i + '_away')
+    feature_cols += sorted(c for c in home_df.columns
+                           if c.endswith('_pri') or c.endswith('_pos'))
 
     missing = [c for c in feature_cols if c not in home_df.columns]
     if missing:
         raise KeyError(
             f"in-season merge is missing {len(missing)} model feature(s), "
-            f"e.g. {missing[:3]}. season_summaries.csv must carry every column "
+            f"e.g. {missing[:3]}. rolling_summaries.csv must carry every column "
             f"listed as data_features in the model's experiment file."
         )
 
     home_df = home_df[cols + feature_cols]
 
     return home_df.dropna(), home_df.dropna()[feature_cols]
+
+
+def _add_preseason_block(df: pd.DataFrame) -> pd.DataFrame:
+    """Prior-season adjusted EPA and the preseason position ratings.
+
+    The in-season model is trained with these alongside rolling form - they are
+    worth 3.18 points of MAE in weeks 2-3, where rolling form knows almost
+    nothing - so prediction has to supply them too.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    summaries = os.path.normpath(os.path.join(
+        here, '..', 'etl', 'summarize', 'results', 'season_summaries.csv'))
+    positions = os.path.normpath(os.path.join(
+        here, '..', 'etl', 'summarize', 'results', 'position_ratings.csv'))
+
+    def attach(d, src, cols, tag):
+        for s in ('home', 'away'):
+            r = src.rename(columns={c: f'{c}_{s}_{tag}' for c in cols})
+            d = d.merge(r, left_on=[f'{s}_team_id', 'season'],
+                        right_on=['team_id', 'season'], how='left')
+            d = d.drop(columns=['team_id'])
+        return d
+
+    if os.path.exists(summaries):
+        s = pd.read_csv(summaries, low_memory=False)
+        have = [c for c in ('adjusted_epa_per_play_off',
+                            'adjusted_epa_per_play_def') if c in s.columns]
+        prior = s[['team_id', 'season'] + have].copy()
+        prior['season'] += 1
+        df = attach(df, prior, have, 'pri')
+    if os.path.exists(positions):
+        p = pd.read_csv(positions, low_memory=False)
+        pf = [c for c in p.columns if c.startswith('pf_')]
+        df = attach(df, p[['team_id', 'season'] + pf], pf, 'pos')
+        cols = [c for c in df.columns if c.endswith('_pos')]
+        df[cols] = df[cols].fillna(df[cols].median())
+    return df
     
 # Predict games
 def predict_games(scaler,
@@ -618,7 +682,8 @@ if __name__ == '__main__':
 
         if season_live:
             features = in_season_features
-            is_stats = season_summary_df.reset_index()
+            # rolling, not season: see is_merge_games_and_stats
+            is_stats = rolling_summary_df.reset_index()
             is_stats = is_stats.loc[is_stats['season'] == target_season]
             is_games_df, is_final_file_to_predict = is_merge_games_and_stats(
                 games_df, is_stats, features)
