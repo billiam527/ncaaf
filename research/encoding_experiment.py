@@ -26,8 +26,20 @@ import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBRegressor
 
+# This file applies its OWN encodings, so predict.py has to hand back the raw
+# per-team matrix. Since the differential encoding was adopted,
+# merge_games_and_stats applies it internally by default - which left this
+# script transforming a frame that had already been transformed, finding no
+# home/away pairs, and silently building an empty one. Set before the import:
+# the flag is read at module load.
+import os  # noqa: E402
+os.environ['DIFFERENTIAL_ENCODING'] = '0'
+
 sys.path.insert(0, '/home/bill/ncaaf/batch_prediction')
 import predict as P  # noqa: E402
+
+assert not P.DIFFERENTIAL_ENCODING, \
+    'predict.py must yield raw per-team columns for this experiment'
 
 R = '/home/bill/ncaaf'
 RESULTS = f'{R}/etl/summarize/results'
