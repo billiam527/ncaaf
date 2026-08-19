@@ -69,6 +69,7 @@ etl/summarize/results_a*/
 # README points at is a broken reference for anyone who clones.
 !/analysis/preseason_lag_ablation.csv
 !/analysis/encoding_experiment.csv
+!/analysis/venue_feature_experiment.csv
 
 # The experiment files record model_params, data_features, train_season_range
 # and the test split - the entire specification of a trained model. They were
