@@ -1,8 +1,41 @@
+"""Pull the remaining scheduled games from ESPN's scoreboard.
+
+ASK FOR A DATE RANGE, NEVER A SINGLE DATE
+
+The scoreboard endpoint silently caps a single-date query at 25 events and
+ignores `limit` entirely while doing it. A Saturday in September has 60 to 90
+games, so the schedule this wrote held 471 of them - FBS teams averaged 6.7
+scheduled games each against a real 12, and the shortfall was invisible because
+every game present was correct.
+
+    dates=20260905&limit=900          25 events
+    dates=20260905-20260905&limit=900 68 events   same day, range form
+    dates=20260901-20260907&limit=900 91 events
+
+The range form does honour `limit` (at limit=25 it returns 25), so both parts
+of the old call were wrong together. Weekly windows over the 2026 season return
+905 rows before de-duplication against ~870 real games.
+
+Two consequences of the range form to keep in mind. ESPN snaps a window out to
+its own week boundaries, so consecutive windows overlap and the results must be
+de-duplicated on game id. And an event's date can no longer be taken from the
+query - it comes from the event itself, converted out of UTC, or a Saturday
+night kickoff on the west coast lands on Sunday.
+
+NOTE: etl/collect/collect_espn_games/run.py builds the same single-date URL with
+`&limit=100` and has the same cap. The historical table it produced is complete
+(up to 74 games on a single date), so the cap postdates that collection - but a
+re-run today would quietly return a third of each season.
+"""
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import urllib.request
 import json
 import pandas as pd
-from datetime import datetime
+
+# ESPN groups games by US Eastern calendar date, which is what the historical
+# games table stores and what the week labels are built around.
+GAME_TZ = ZoneInfo('America/New_York')
 
 
 def date_list_generation(start_date: str,
@@ -50,6 +83,22 @@ def date_list_generation(start_date: str,
         date_strs.append(i.strftime('%Y%m%d'))
 
     return date_strs
+
+
+def date_windows(date_strs: list, size: int = 7) -> list:
+    """Group a list of yyyymmdd strings into 'yyyymmdd-yyyymmdd' windows.
+
+    One request per window instead of per day, because the single-date form of
+    the scoreboard endpoint caps at 25 events. Windows are built from the day
+    list rather than from the calendar so the season-boundary logic in
+    date_list_generation stays the one place that decides what to pull.
+    """
+    assert isinstance(date_strs, list), 'date_strs must be a list'
+    assert size > 0, 'size must be positive'
+
+    return [f"{chunk[0]}-{chunk[-1]}"
+            for chunk in (date_strs[i:i + size]
+                          for i in range(0, len(date_strs), size))]
 
 
 def create_urls(prefix, suffix, data):
@@ -178,40 +227,53 @@ if __name__ == '__main__':
 
     dates = date_list_generation(datetime.today().strftime('%Y-%m-%d'),
                                  (datetime.today() + timedelta(days=365)).strftime('%Y-%m-%d'))
+    windows = date_windows(dates)
 
     date_prefix = 'http://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?dates='
     date_suffix = '&limit=900'
 
-    date_urls = create_urls(date_prefix, date_suffix, dates)
+    date_urls = create_urls(date_prefix, date_suffix, windows)
 
     dfs = []
     failed = []
-    for date, url in zip(dates, date_urls):
+    for window, url in zip(windows, date_urls):
         json_data = retrieve_espn_game_data(url)
         if json_data is None:
-            failed.append(date)
+            failed.append(window)
             continue
         pd_data = transform_espn_ncaaf_game_data(json_data)
         if pd_data.empty:
             continue
-        pd_data['date'] = pd.to_datetime(date, format='%Y%m%d')
         dfs.append(pd_data)
 
     # a partial scrape produces a schedule that silently omits games, so refuse
     # to write one rather than let it reach the prediction file
     if failed:
-        print('Failed to retrieve', len(failed), 'of', len(dates), 'dates')
-        if len(failed) > len(dates) * 0.05:
-            raise RuntimeError('Too many dates failed to download: ' + ', '.join(failed))
+        print('Failed to retrieve', len(failed), 'of', len(windows), 'windows')
+        if len(failed) > len(windows) * 0.05:
+            raise RuntimeError('Too many windows failed to download: ' + ', '.join(failed))
 
     if not dfs:
         raise RuntimeError('No scheduled games retrieved for any of the ' +
-                           str(len(dates)) + ' dates searched')
+                           str(len(windows)) + ' windows searched')
 
     df = pd.concat(dfs)
+    # ESPN snaps each window out to its own week boundaries, so consecutive
+    # windows overlap and the same game arrives more than once.
+    before = len(df)
+    df = df.drop_duplicates(subset='id')
+    print('Retrieved', before, 'rows,', len(df), 'distinct games')
+
+    # The date is the event's own kickoff, not the window that found it, taken
+    # in US Eastern so a late west-coast Saturday does not become Sunday.
+    df['date'] = (pd.to_datetime(df['date'], format='ISO8601', utc=True)
+                    .dt.tz_convert(GAME_TZ).dt.normalize().dt.tz_localize(None))
+
     df = df.loc[df['status'] == 'STATUS_SCHEDULED']
     df = df[df['name'].str.contains('TBD') == False]
     df = df[df['short_name'].str.contains('TBD') == False]
     df.sort_values('date', inplace=True)
 
+    print(len(df), 'scheduled games from', df['date'].min().date(),
+          'to', df['date'].max().date())
     df.to_csv('scheduled_games.csv')
