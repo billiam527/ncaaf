@@ -25,11 +25,122 @@ out at +3, and a game predicted at +35 had its mode at +9 - because with a
 sigma near 18 the single most likely integer is dominated by the global key
 number effect rather than the game. Centring on the prediction fixes that.
 
+WHAT --validate USED TO OVERSTATE
+
+The calibrator and sigma were fitted on the whole walk-forward history and then
+checked against that same history, which isotonic regression is flexible enough
+to flatter. Refitting the entire chain per season on earlier seasons only -
+blend weights, calibrator, sigma - moves the worst probability band from 0.8%
+off to 4.0% off. research/calibration_walk_forward.sh does that and is the
+number to trust; --validate is in-sample and says so.
+
+That honest pass also answered the question it was run to answer. Sigma is not
+dangerously narrow. It read 15.85 fitted against 16.07 realised, a gap of 0.22
+points, and removing the calibrator (below) closes it to 16.04 against 15.98 -
+marginally wide, which is the safe side. The sigma published before the
+walk-forward history was rebuilt was 16.58, so the error then ran the other
+way, and the overconfidence this was run to find was never there.
+
+THE ISOTONIC CALIBRATOR IS OFF BY DEFAULT
+
+It was adopted on an in-sample reading of the leaked history (Brier 0.1960 ->
+0.1918, MAE 13.48 -> 13.22) and had never been checked out of sample. Damping
+its correction toward the identity by local support improves every measure
+monotonically, and the limit of that sweep is switching it off:
+
+    centre                  MAE all  MAE mid  MAE tail   Brier  sigma
+    isotonic, unshrunk       12.730   12.685     13.42  0.1846  15.85
+    shrunk K=50              12.690   12.672     12.97  0.1844  15.90
+    shrunk K=200             12.672   12.659     12.87  0.1841  15.95
+    shrunk K=1000            12.661   12.648     12.85  0.1839  16.01
+    no calibrator at all     12.659   12.647     12.84  0.1839  16.04
+
+A monotone sweep across a smooth family is far stronger evidence than any two
+of those rows compared alone, and the mechanism is plain: isotonic regression
+on ~4,200 points with no regularisation fits noise, worst where the data is
+thinnest. Its map across the top of the range, with the games behind each
+point, shows how thin that gets:
+
+    raw    calibrated   shift   support
+  +30.0        +31.1    +1.1        86
+  +35.0        +42.1    +7.1        51
+  +42.5        +52.6   +10.1         5
+  +50.0        +53.1    +3.1         0     <- clipped, nothing behind it
+
+Ten of the 469 games on the 2026 slate sit beyond +35, including one at a raw
++50.6, past the largest prediction the history contains. Removing the
+calibrator wins on MAE in all three held-out seasons.
+
+--calibrate puts it back. research/calibrator_value.sh is the evidence.
+
+What it was right about is that the model under-predicts blowouts: games
+predicted +30 to +35 landed at +36.9 over 68 games. That signal is real and
+still uncorrected - the top two probability bands remain 2-3% light. It is not
+worth an unregularised monotone fit to chase, and a shrunk version of the same
+fit does not beat switching it off.
+
+THE DRIFT OFFSET
+
+The real fault was in the centre, not the spread. Every out-of-sample band was
+wrong with the same sign - home teams won 1.0 to 4.0 points more often than
+predicted - which is a shift, not a miscalibrated width. Home advantage has
+risen steadily and the blend lags it:
+
+    season   home win%   mean margin   model centre   bias
+      2020       51.0%          1.94           4.05  -2.11
+      2021       57.4%          3.25           3.49  -0.25
+      2022       57.8%          3.91           3.69  +0.22
+      2023       58.7%          4.23           3.53  +0.70
+      2024       59.0%          5.04           4.47  +0.57
+      2025       59.3%          5.08           4.08  +1.00
+
+A calibrator fitted on seasons with weaker home advantage cannot correct a
+drift that postdates them, so the centre carries +0.95 points of systematic
+lean toward the away team. That is a directional error on every game, which is
+the kind that costs money rather than accuracy.
+
+DRIFT_LOOKBACK adds back the mean residual of the most recent seasons (this
+sweep predates switching the calibrator off, so the levels sit ~0.07 above the
+shipped ones; the ordering is unchanged):
+
+    offset from     offset   bias left   win% gap     MAE    Brier
+    none             +0.00       +0.95      +2.5%   12.75   0.1850
+    last 1 season    +0.67       +0.28      +1.2%   12.73   0.1845
+    last 2 seasons   +0.53       +0.41      +1.4%   12.73   0.1846
+    last 3 seasons   +0.21       +0.74      +2.1%   12.75   0.1849
+
+Two seasons rather than one, though one scored marginally better: a single
+season's mean residual carries a standard error near 0.58 points on an estimate
+of 0.67, and the gap between them (0.0001 Brier over three test seasons) is far
+inside that. Two halves the sampling error for the same result.
+
+Extrapolating the bias linearly instead was tried and overshoots - +0.95
+becomes -0.91 - because the fitted slope is dragged by 2020, played in empty
+stadiums. Dropping 2020 outright halves the bias but costs MAE and Brier. The
+offset is the smaller instrument and the only one that improved every measure.
+
+THE GRID WAS TOO NARROW FOR LOPSIDED GAMES
+
+distribution() renormalises over GRID, so mass falling past the edge was not
+dropped, it was REDISTRIBUTED across the whole range - including below the
+market line, where it counts as a loss. With the grid at +/-70 a centre of
++51.4 put 12% of its mass outside, and p_cover read 44.0% against a true 53.5%.
+Nineteen of the 469 games on the 2026 slate were far enough out for the error
+to exceed a point, and it grew with the centre, so it was worst exactly where
+the model was most confident. The grid now runs +/-100, past anything football
+does - the widest margin in 12,213 games is 78.
+
 Produces per game:
+    calibrated_margin the centre the distribution sits on: the blend plus the
+                      drift offset, and the isotonic map only under --calibrate
     median_margin     the calibrated point estimate
     mode_margin       most likely single outcome, football-shaped
     p_home_win        probability the home team wins outright
     p_cover           probability of covering the market line, when known
+    edge_calibrated   centre minus the market line. add_market_lines writes an
+                      `edge` from the raw blend instead, which is a different
+                      number and disagreed in sign with p_cover on 4 of the 37
+                      priced games. Use this one with p_cover.
     margin_dist       the full P(margin = k), as JSON
 
     python margin_distribution.py
@@ -57,10 +168,27 @@ PREDICTIONS = os.path.join(_HERE, 'prediction_file', 'predictions_with_lines.csv
 FALLBACK = os.path.join(_HERE, 'prediction_file', 'new_predictions.csv')
 OUT = os.path.join(_HERE, 'prediction_file', 'predictions_with_distribution.csv')
 
-LO, HI = -70, 70
+# The grid has to outrun the widest centre by several sigma. It ran -70 to +70,
+# and because distribution() renormalises over it, mass past the edge was not
+# dropped but REDISTRIBUTED across the whole range - including below the market
+# line, where it counts as a loss. On the one 2026 game centred at +51.4 that
+# published p_cover 44.0% against a true 53.5%; 19 of 469 games sat far enough
+# out for the error to exceed a point. Real margins reach 78 in 12,213 games,
+# so +/-100 is past anything football does and leaves under 0.3% outside even
+# for the most lopsided centre on the slate.
+LO, HI = -100, 100
 GRID = np.arange(LO, HI + 1)
 SMOOTHING = 2.5          # sigma used to build the "no lumpiness" reference
 KEY_NUMBERS = (3, 7, 10, 14, 17, 21)
+
+# Below this smoothed density there is no support for a lumpiness estimate, so
+# the weight falls back to 1.0 (neutral). emp/smooth is a ratio of two small
+# numbers once the history thins out: margin 65 drew weight 0.16 from ONE game
+# and margin 70 drew 0.15 from none, suppressing those outcomes by 85% on no
+# evidence at all. This cuts in beyond |margin| 57, where fewer than about five
+# effective games back any estimate. Every key number is 21 or below, so none of
+# them are touched at any threshold up to 1e-3.
+MIN_SUPPORT = 2.5e-4
 
 # Seasons are weighted 0.5 ** (age / HALF_LIFE). The scoring distribution
 # drifts: two-point attempts have pushed margins of 2 from 2.16% to 3.26% and
@@ -69,6 +197,10 @@ KEY_NUMBERS = (3, 7, 10, 14, 17, 21)
 # every season in the estimate while letting recent rules and play-calling
 # dominate.
 HALF_LIFE = 5.0
+
+# Seasons of recent history the drift offset is measured on. See the docstring:
+# home advantage is rising and the calibrator, fitted on older seasons, lags it.
+DRIFT_LOOKBACK = 2
 
 
 def season_weights(seasons, half_life=HALF_LIFE, reference=None):
@@ -100,7 +232,14 @@ def key_number_weights(games, half_life=HALF_LIFE):
     np.add.at(counts, idx[ok], w[ok])
     emp = counts / counts.sum()
     smooth = gaussian_filter1d(emp, sigma=SMOOTHING, mode='nearest')
-    return np.clip(np.where(smooth > 1e-9, emp / smooth, 1.0), 0.15, 4.0)
+    # Past the widened grid's edges the smoothed density underflows to exactly
+    # zero, so guard the division rather than letting np.where evaluate 0/0 for
+    # every element and then discard the NaNs.
+    ok = smooth > MIN_SUPPORT
+    ratio = np.ones(len(GRID))
+    np.divide(emp, smooth, out=ratio, where=ok)
+    # Neutral wherever the history is too thin to say anything about lumpiness.
+    return np.where(ok, np.clip(ratio, 0.15, 4.0), 1.0)
 
 
 def add_blended(h):
@@ -174,10 +313,38 @@ def fit_calibrator(half_life=HALF_LIFE, fit_col='blended'):
     return iso
 
 
+def drift_offset(calibrator=None, fit_col='blended', lookback=DRIFT_LOOKBACK):
+    """Mean residual over the most recent seasons, added back to the centre.
+
+    Home advantage is drifting up and the model lags it, so the centre leans
+    toward the away team by about a point. This is deliberately a constant: the
+    bias is a shift, sigma is already right, and every attempt to fit its shape
+    rather than its level overshot.
+    """
+    if not lookback:
+        return 0.0
+    h = load_history(fit_col)
+    col = fit_col if fit_col in h.columns else 'in_season_model_preds'
+    recent = sorted(h['test_season'].unique())[-lookback:]
+    m = h['test_season'].isin(recent).to_numpy()
+    if not m.any():
+        return 0.0
+    centre = (calibrator.predict(h[col]) if calibrator is not None
+              else h[col].to_numpy(float))
+    r = h['home_score_differential'].to_numpy(float)[m] - centre[m]
+    return float(np.mean(r))
+
+
 def residual_sigma(half_life=HALF_LIFE, calibrator=None, fit_col='blended'):
     """Recency-weighted spread of outcomes around the (optionally calibrated)
     prediction. Calibrating shifts the centre, so sigma must be measured
-    against the same quantity the distribution is centred on."""
+    against the same quantity the distribution is centred on.
+
+    The drift offset is deliberately NOT applied here. It corrects a forward
+    shift that has not happened yet within the training seasons, so adding it
+    to historical residuals would widen sigma for a bias that is not there. The
+    effect either way is under a tenth of a point.
+    """
     h = load_history(fit_col)
     col = fit_col if fit_col in h.columns else 'in_season_model_preds'
     centre = (calibrator.predict(h[col]) if calibrator is not None
@@ -209,13 +376,20 @@ def summarise(p, market_margin=np.nan):
     return out
 
 
-def validate(weights, sigma, calibrator=None, fit_col='blended'):
-    """Are the probabilities honest? Compare predicted P(win) to realised."""
+def validate(weights, sigma, calibrator=None, fit_col='blended', offset=0.0):
+    """Are the probabilities honest? Compare predicted P(win) to realised.
+
+    IN SAMPLE. The calibrator, sigma and offset below were all fitted on these
+    same games, and isotonic regression flatters itself that way: the worst
+    band here reads 0.8% against 4.0% when the chain is refitted per season on
+    earlier seasons only. Use research/calibration_walk_forward.sh for the
+    number that means something; this pass is for spotting gross breakage.
+    """
     h = load_history(fit_col)
     col = fit_col if fit_col in h.columns else 'in_season_model_preds'
     raw = h[col].to_numpy(float)
     actual = h['home_score_differential'].to_numpy(float)
-    preds = calibrator.predict(raw) if calibrator is not None else raw
+    preds = (calibrator.predict(raw) if calibrator is not None else raw) + offset
 
     pw = np.array([distribution(p, weights, sigma)[GRID > 0].sum() for p in preds])
     won = actual > 0
@@ -254,8 +428,14 @@ def main():
     ap.add_argument('--game', default=None, help='substring of short_name to inspect')
     ap.add_argument('--show-dist', action='store_true')
     ap.add_argument('--validate', action='store_true', help='check probability calibration')
+    ap.add_argument('--calibrate', action='store_true',
+                    help='apply the isotonic calibrator; off by default because '
+                         'it costs MAE and Brier out of sample (see docstring)')
     ap.add_argument('--raw-centre', action='store_true',
-                    help='centre on the raw model output instead of the calibrated one')
+                    help='no-op, kept for older scripts: raw is now the default')
+    ap.add_argument('--drift-lookback', type=int, default=DRIFT_LOOKBACK,
+                    help='seasons the home-advantage drift offset is measured '
+                         'on; 0 disables it')
     ap.add_argument('--out', default=OUT)
     args = ap.parse_args()
 
@@ -272,17 +452,20 @@ def main():
                       if preds is not None and c in preds.columns), None)
     fit_col = resolve_fit_column(model_col) if model_col else 'blended'
 
-    calibrator = None if args.raw_centre else fit_calibrator(hl, fit_col)
+    calibrator = fit_calibrator(hl, fit_col) if args.calibrate else None
     sigma = args.sigma or residual_sigma(hl, calibrator, fit_col)
+    offset = drift_offset(calibrator, fit_col, args.drift_lookback)
     eff = season_weights(games['season'].to_numpy(float), hl).sum()
     print(f"sigma = {sigma:.2f} points; key-number weights from {len(games)} FBS games"
           f" ({eff:.0f} effective, half-life "
           f"{'off' if hl is None else f'{hl:g} seasons'}); "
-          f"centre = {'raw prediction' if calibrator is None else 'calibrated'}"
-          f", fitted on {fit_col}\n")
+          f"centre = {'raw prediction' if calibrator is None else 'isotonic-calibrated'}"
+          f", fitted on {fit_col}")
+    print(f"drift offset = {offset:+.2f} points "
+          f"({'off' if not args.drift_lookback else f'last {args.drift_lookback} seasons'})\n")
 
     if args.validate:
-        validate(weights, sigma, calibrator, fit_col)
+        validate(weights, sigma, calibrator, fit_col, offset)
         print("\n=== effect of recency weighting on the key numbers ===")
         unw = key_number_weights(games, None)
         print(f"{'margin':>7}{'unweighted':>12}{'weighted':>11}{'change':>10}")
@@ -305,10 +488,15 @@ def main():
             rows.append({})
             continue
         centre = (float(calibrator.predict([r[model_col]])[0])
-                  if calibrator is not None else float(r[model_col]))
+                  if calibrator is not None else float(r[model_col])) + offset
         p = distribution(centre, weights, sigma)
         s = {'calibrated_margin': round(centre, 2)}
         s.update(summarise(p, r.get('market_margin', np.nan)))
+        # add_market_lines computes `edge` from the raw blend, before the drift
+        # offset, so its sign can disagree with p_cover. Publish the edge that
+        # matches the distribution alongside it rather than silently differing.
+        if pd.notna(r.get('market_margin', np.nan)):
+            s['edge_calibrated'] = round(centre - float(r['market_margin']), 2)
         keep = p > 0.002
         s['margin_dist'] = json.dumps({int(k): round(float(v), 4)
                                        for k, v in zip(GRID[keep], p[keep])})

@@ -84,10 +84,12 @@ This is the largest known error in the model.
 | `key_numbers.sh` | Frequency of each absolute margin | 3 occurs 2.29x baseline, 7 at 2.13x, 9 at 0.39x. 34.5% of games land on 3/7/10/14/17/21 |
 | `key_numbers_by_era.sh` | Whether the key-number curve is stable over time | Stable enough to fit on pooled history |
 | `margin_distribution_shape.sh` | Residual quantiles vs normal | Justifies the nfelo-style approach in `margin_distribution.py` |
-| `calibration_walkthrough.sh` | Raw prediction vs realised outcome, by band | Isotonic calibration improves MAE 14.42 → 14.00 and Brier 0.2061 → 0.2031 |
+| `calibration_walkthrough.sh` | Raw prediction vs realised outcome, by band | Isotonic calibration improves MAE 14.42 → 14.00 and Brier 0.2061 → 0.2031 — **in sample**. Superseded by `calibrator_value.sh`, which reverses the conclusion out of sample |
 | `calibration_centring.sh` | Centring the distribution on the prediction vs on zero | Centring on the prediction is required — the uncentred version returned a degenerate mode of +9 for a +35 prediction |
 | `ats_edge.sh` | Win rate against the closing spread | **No edge.** 50.6 / 50.5 / 49.9% across raw / linear / isotonic over 4,194 bets, against a 52.4% break-even. Closed |
 | `calibration_fit_column.sh` | Whether the calibrator is fitted on the column inference centres on | It was not. Fitted on `in_season_model_preds`, applied to `blended_prediction`. Worst probability band was off by **8.9%**; matching the columns brings it to 2.0%. Fixed in `margin_distribution.py` |
+| `calibration_walk_forward.sh` | The whole distribution chain refitted per season on earlier seasons only | `--validate` is in-sample and flatters itself: worst band 0.8% against **4.0%** honestly. Sigma is fine — 15.85 fitted against 16.07 realised. The fault was a **+0.95 point centre bias** from rising home advantage (51.0% of games in 2020 to 59.3% in 2025), which `DRIFT_LOOKBACK` now corrects to +0.41 |
+| `calibrator_value.sh` | Whether the isotonic calibrator helps out of sample | **It does not.** Damping it toward the identity improves MAE and Brier monotonically, and the limit of that sweep is switching it off: MAE 12.730 → 12.659, Brier 0.1846 → 0.1839, winning on MAE in all three held-out seasons. Its adopted gain was measured in sample on the leaked history. Now off by default; `--calibrate` restores it |
 
 ## Model internals
 
