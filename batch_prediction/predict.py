@@ -39,6 +39,7 @@ import argparse
 import pickle
 import glob
 import os
+import re
 import shutil
 
 
@@ -390,6 +391,98 @@ def add_returning_production(stats_df: pd.DataFrame,
     return merged
 
 
+# ==============================================================================
+# Feature encoding
+# ==============================================================================
+# The model used to see every quantity twice, once per team, and each stat three
+# times over, once per lag: 104 columns. It now sees the DIFFERENCE between the
+# two teams, with the three lags of each stat collapsed by decay: 28.
+#
+# research/encoding_experiment.py measured five encodings walk-forward over seven
+# seasons and 9,751 games. This one is not more accurate in any way that clears
+# the noise - 13.809 MAE against 13.834 - and it is chosen for two other reasons.
+#
+# It is a quarter of the columns on about 5,000 training rows.
+#
+# And it removes an artefact that made the model's own reasoning unreadable. A
+# tree splits one variable at a time, so "home minus away exceeds 0.3" is a
+# DIAGONAL boundary that it can only approximate with a staircase of axis-aligned
+# steps, and the credit for that staircase is divided between the two columns
+# however the fitting happens to fall. That is why a front-seven pair could show
+# one team ranked 41st against the other's 62nd while the pair's net favoured the
+# worse-ranked side. Handing the model the difference turns the diagonal into an
+# axis.
+#
+# Dropping the level costs nothing measurable: adding (home + away) to the
+# difference adds between +0.0000 and +0.0001 R2 against actual margin for every
+# one of the eight unit ratings. Two elite teams two points apart play to the
+# same margin as two poor teams two points apart.
+#
+# The decay is 4:2:1, halving each season back. It costs 0.015 MAE against flat
+# differences, inside the noise, and buys the guarantee that three-season-old
+# production can never outweigh last season's - which the flat encoding allowed
+# in four of 24 stat families, concentrated in rushing offence, where roster
+# turnover is most complete.
+DIFFERENTIAL_ENCODING = os.environ.get('DIFFERENTIAL_ENCODING', '1') != '0'
+LAG_DECAY = {'FY': 4.0, 'FY-1': 2.0, 'FY-2': 1.0}
+
+
+def _split_side(col):
+    """(base, lag, side) for a merged column, or None if it is not a pair."""
+    m = re.match(r'^(.*?)_(FY(?:-\d)?)_(home|away)$', col)
+    if m:
+        return m.group(1), m.group(2), m.group(3)
+    m = re.match(r'^(.*?)_(home|away)$', col)
+    if m:
+        return m.group(1), '', m.group(2)
+    return None
+
+
+def to_differentials(X: pd.DataFrame, decay: bool = True) -> pd.DataFrame:
+    """Home minus away per quantity, with each stat's lags collapsed by decay.
+
+    Column order is sorted by name and therefore reproducible: the scaler and
+    the estimator index by position, so training and inference have to agree.
+    """
+    sides = {}
+    for c in X.columns:
+        parsed = _split_side(c)
+        if parsed:
+            base, lag, side = parsed
+            sides.setdefault((base, lag), {})[side] = c
+    pairs = {k: v for k, v in sides.items() if len(v) == 2}
+
+    unpaired = [c for c in X.columns
+                if not any(c in v.values() for v in pairs.values())]
+    if unpaired:
+        print(f"   WARNING: {len(unpaired)} column(s) have no home/away twin "
+              f"and are dropped: {unpaired[:4]}")
+
+    diffs = {f'{base}|{lag}': (X[v['home']].to_numpy(float)
+                               - X[v['away']].to_numpy(float))
+             for (base, lag), v in pairs.items()}
+
+    out = {}
+    if decay:
+        lagged = sorted({b for b, lag in pairs if lag})
+        for base in lagged:
+            have = [(lag, w) for lag, w in LAG_DECAY.items()
+                    if f'{base}|{lag}' in diffs]
+            total = sum(w for _, w in have)
+            out[f'{base}_decayed'] = sum(
+                (w / total) * diffs[f'{base}|{lag}'] for lag, w in have)
+        for key, v in diffs.items():
+            base, lag = key.split('|')
+            if not lag:
+                out[f'{base}_diff'] = v
+    else:
+        for key, v in diffs.items():
+            base, lag = key.split('|')
+            out[f'{base}{"_" + lag if lag else ""}_diff'] = v
+
+    return pd.DataFrame({k: out[k] for k in sorted(out)}, index=X.index)
+
+
 # merge the games that we want to predict with the last three years of sum stats
 def merge_games_and_stats(games_df: pd.DataFrame,
                           stats_df: pd.DataFrame):
@@ -415,7 +508,11 @@ def merge_games_and_stats(games_df: pd.DataFrame,
         else:
             final_cols.append(col)
 
-    return home_df[final_cols].dropna(), home_df.dropna()[col_in_list]
+    X = home_df[final_cols].dropna()
+    meta = home_df.dropna()[col_in_list]
+    if DIFFERENTIAL_ENCODING:
+        X = to_differentials(X)
+    return X, meta
 
 
 def is_merge_games_and_stats(games_df: pd.DataFrame,

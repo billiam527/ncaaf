@@ -2,10 +2,19 @@ import pandas as pd
 import numpy as np
 import glob
 import os
+import sys
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from pickle import dump
 import argparse
+
+# The differential encoding is imported rather than reimplemented. This file and
+# predict.py already keep separate copies of merge_games_and_stats, and that
+# duplication is how the in-season path came to be silently building a frame the
+# model was never trained on. One definition, used by both.
+sys.path.insert(0, os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), '..', '..', 'batch_prediction')))
+from predict import DIFFERENTIAL_ENCODING, to_differentials  # noqa: E402
 
 
 def read_data(games_df_file_loc: str,
@@ -446,6 +455,24 @@ if __name__ == '__main__':
     merged_df.to_csv('temp/merged.csv')
     merged_df_raw.to_csv('temp/merged_raw.csv')
     merged_df_final.to_csv('temp/merged_final.csv')
+
+    # Replace the per-team columns with differences before the split, so the
+    # scaler and the estimator are fitted on exactly what inference will build.
+    #
+    # Only the _home/_away columns are touched. final_cols also carries
+    # home_score_differential - final_edits selects [y_col] + features and then
+    # drops y_col, which removes both copies, so the target has always been
+    # sitting in this list - and dropping it here removed the target from the
+    # frame entirely.
+    if DIFFERENTIAL_ENCODING:
+        paired = [c for c in final_cols
+                  if c.endswith('_home') or c.endswith('_away')]
+        other = [c for c in final_cols if c not in paired]
+        diffs = to_differentials(merged_df[paired])
+        merged_df = pd.concat([merged_df.drop(columns=paired), diffs], axis=1)
+        print(f"   differential encoding: {len(paired)} paired columns -> "
+              f"{diffs.shape[1]}; carried through: {other}")
+        final_cols = other + list(diffs.columns)
 
     train_df, \
         test_df = split_data(data=merged_df,
