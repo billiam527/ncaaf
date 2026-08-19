@@ -1,0 +1,7 @@
+2026_08_13_17_35_05
+train_season_range: 2015 - 2024
+test_year: 2018
+data_features: adjusted_rush_success_off,adjusted_rush_success_def,adjusted_pass_success_off,adjusted_pass_success_def,adjusted_explosive_rush_rate_off,adjusted_explosive_rush_rate_def,adjusted_explosive_pass_rate_off,adjusted_explosive_pass_rate_def,adjusted_epa_per_rush_off,adjusted_epa_per_rush_def,adjusted_epa_per_pass_off,adjusted_epa_per_pass_def
+fbs_only_ind: True
+training_algorithm: xgboost_reg
+model_params: {"n_estimators": 200, "max_depth": 2, "learning_rate": 0.08, "min_child_weight": 10, "subsample": 0.8, "colsample_bytree": 0.6, "reg_lambda": 5.0}

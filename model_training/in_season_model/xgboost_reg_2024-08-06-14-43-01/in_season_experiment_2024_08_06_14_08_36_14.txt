@@ -1,0 +1,6 @@
+2024_08_06_14_08_36_14
+train_season_range: 2015 - 2023
+test_year: 2015
+data_features: adjusted_play_success_off,adjusted_play_success_def,adjusted_yards_per_play_off,adjusted_yards_per_play_def
+fbs_only_ind: True
+training_algorithm: xgboost_reg

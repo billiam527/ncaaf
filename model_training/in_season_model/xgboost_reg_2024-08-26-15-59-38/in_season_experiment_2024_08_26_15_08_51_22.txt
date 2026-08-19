@@ -1,0 +1,6 @@
+2024_08_26_15_08_51_22
+train_season_range: 2015 - 2023
+test_year: 2018
+data_features: adjusted_rush_success_off,adjusted_rush_success_def,adjusted_pass_success_off,adjusted_pass_success_def,adjusted_explosive_rush_rate_off,adjusted_explosive_rush_rate_def,adjusted_explosive_pass_rate_off,adjusted_explosive_pass_rate_def
+fbs_only_ind: True
+training_algorithm: xgboost_reg

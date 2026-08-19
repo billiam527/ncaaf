@@ -15,8 +15,11 @@
 *.csv*
 *.txt*
 
-# Analysis and backtest outputs
-/analysis/
+# Analysis and backtest outputs.
+# `/analysis/` excluded the directory itself, and git cannot re-include a file
+# whose parent directory is excluded - so no negation below could reach inside
+# it. `/analysis/*` excludes the contents instead, which negations can override.
+/analysis/*
 
 # Windows alternate data streams, created when a file is downloaded via a browser
 *:Zone.Identifier
@@ -40,3 +43,40 @@ etl/collect/collect_cfbd_players/temp/
 etl/summarize/results_with_garbage/
 
 etl/summarize/results_a*/
+
+# ==============================================================================
+# Exceptions: things that SHIP, or that a README points at as evidence
+# ==============================================================================
+# The blanket *.csv* and *.txt* rules are right for generated data - the
+# pipeline produces gigabytes of it. They were also swallowing the artefacts
+# that ARE the model, which meant the numbers actually in production were
+# unversioned: a bad refit could not be diffed, reverted, or even noticed.
+#
+# Negations must come after the rules they override; git takes the last
+# matching pattern. Anything under a **/temp/ directory stays ignored either
+# way, because that directory is excluded rather than its contents.
+
+# The blend weights that ship. 17 rows, and the refit on 2026-08-18 moved every
+# one of them - exactly the change that should have been reviewable as a diff.
+!model_training/model_blender/blended_model.csv
+
+# The walk-forward history those weights are fitted on. Regenerating it retrains
+# both models once per season, so this is hours of compute, and it is the only
+# way to see whether a weight moved because the evidence moved.
+!/analysis/backtest_expanding_preds.csv
+
+# Cited by research/README.md as where a finding lives; an unversioned file a
+# README points at is a broken reference for anyone who clones.
+!/analysis/preseason_lag_ablation.csv
+
+# The experiment files record model_params, data_features, train_season_range
+# and the test split - the entire specification of a trained model. They were
+# ignored, inside directories that are themselves untracked, which put the
+# hyperparameters in a worse place than the weights.
+#
+# create_experiment.sh reads the newest of these to carry parameters forward on
+# a routine retrain. Those parameters are worth 1.265 MAE over library defaults
+# (research/in_season_hyperparams.sh), so if the run directories are ever
+# cleaned, the next retrain silently loses that much and reports nothing.
+!model_training/**/*experiment*.txt
+!model_training/**/model_results.txt

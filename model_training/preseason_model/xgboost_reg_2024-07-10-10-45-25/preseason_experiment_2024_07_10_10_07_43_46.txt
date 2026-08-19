@@ -1,0 +1,6 @@
+2024_07_10_10_07_43_46
+train_season_range: 2016 - 2023
+test_year: 2023
+data_features: adjusted_play_success_off,adjusted_play_success_def,adjusted_yards_per_play_off,adjusted_yards_per_play_def
+fbs_only_ind: True
+training_algorithm: xgboost_reg
