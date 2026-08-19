@@ -101,6 +101,7 @@ This is the largest known error in the model.
 | `blender_leak_diagnosis.sh` | Why blender weights looked impossibly good | Weights had been fit on in-sample predictions — preseason correlated 0.98 with actuals. Regenerating from expanding-window predictions dropped that to 0.29–0.51 |
 | `backtest_reconciliation.sh` | Whether backtest inputs match training inputs | Caught a missing FBS filter worth ~0.3 MAE |
 | `preseason_lag_ablation.py` | Whether `_FY-1` and `_FY-2` prior seasons earn their place | Run via the ablation output in `analysis/preseason_lag_ablation.csv` |
+| `in_season_hyperparams.sh` | Whether the in-season hyperparameters should be re-derived for 72 features | **The tuner was the problem, not the parameters.** `tune_hyperparams.inseason_season` still joined `season_summaries` on `(team_id, season)` — the leak the model no longer has — so `--search` tuned the old 12-feature leaking problem. Fixed. The parameters themselves survive re-searching: 61 stock configs beat the incumbent by 0.043 (t=1.97 as the argmax of 61, so nothing), and a 24-config sweep of the slow region beat it 15 times in 24, mean −0.011. Library defaults lose by **1.265 at t=9.87** — tuning matters hugely, re-tuning does not |
 
 ## Play-by-play data audits
 
