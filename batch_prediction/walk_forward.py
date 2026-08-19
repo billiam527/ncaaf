@@ -57,6 +57,11 @@ STATS = ("play_success rush_success pass_success yards_per_play rush_yards_per_p
 
 POSTSEASON_WEEK = 90  # sorts bowls after the numbered weeks
 
+# The in-season model cannot usefully train earlier than this: the as-of-week
+# opponent adjustment is only built from 2016, and the skill-position ratings
+# it once used began in 2017.
+INS_TRAIN_START = 2017
+
 
 def week_to_int(w):
     """'Week 3' -> 3, 'bowl' -> POSTSEASON_WEEK, anything else -> NaN."""
@@ -153,39 +158,49 @@ def walk_forward_season(season, pre_dir, ins_dir, fbs_only=True, verbose=True):
     pre_meta['preseason_model_preds'] = pre_model.predict(pre_scaler.transform(pre_matrix))
     pre_lookup = pre_meta[['id', 'preseason_model_preds']]
 
-    adjuster = OpponentAdjuster(AnalyticsConfig())
-    out = []
-    for W in sorted(w for w in gbg.week_num.unique() if w < POSTSEASON_WEEK):
-        prior = gbg[gbg.week_num < W]
-        target = games[games.week_num == W]
-        if prior.empty or target.empty:
-            continue
-        try:
-            adj = adjuster.adjust_for_opponents(prior, STATS)
-            if adj is None or adj.empty:
-                raise ValueError('adjuster produced no rows')
-        except Exception as exc:
-            if verbose:
-                print(f"  week {int(W):>2}: no adjustment yet ({str(exc)[:50]})")
-            continue
-
-        feats, order = _merge_in_season(target, adj, ins_feats)
-        if feats is None or feats.empty:
-            continue
-        feats = feats.copy()
-        feats['in_season_model_preds'] = ins_model.predict(ins_scaler.transform(feats[order]))
-        keep = [c for c in ('id', 'week', 'week_num', 'date', 'short_name', 'season',
-                            'home_team_id', 'away_team_id', 'home_score_differential',
-                            'in_season_model_preds') if c in feats.columns]
-        merged = feats[keep].merge(pre_lookup, on='id', how='inner')
-        out.append(merged)
-        if verbose:
-            print(f"  week {int(W):>2}: {prior.game_id.nunique():>4} prior games "
-                  f"-> {len(merged):>3} predicted")
-
-    if not out:
+    # In-season features come from predict.py rather than being rebuilt here.
+    # They used to be assembled locally by refitting the opponent adjustment
+    # once per week. That was the right idea and a second implementation of it,
+    # so when the in-season model moved to rolling summaries plus a prebuilt
+    # as-of-week table, this copy went looking for adjusted_* columns that were
+    # no longer the model's features, found none, and would have produced NO
+    # in-season predictions rather than failing loudly.
+    #
+    # The per-week refit is also no longer needed here. asof_adjusted.csv holds
+    # the adjustment for every (season, week) computed only from games played
+    # before that week, so reading it is already walk-forward safe.
+    roll = pd.read_csv(f'{RESULTS}/rolling_summaries.csv', low_memory=False)
+    roll = roll[roll.season == season].reset_index(drop=True)
+    if roll.empty:
         return pd.DataFrame()
-    return pd.concat(out, ignore_index=True)
+
+    is_meta, is_matrix = P.is_merge_games_and_stats(games, roll, ins_feats)
+    if is_meta is None or is_meta.empty:
+        if verbose:
+            print(f"  {season}: no in-season features")
+        return pd.DataFrame()
+    is_meta = is_meta.copy()
+    is_meta['in_season_model_preds'] = ins_model.predict(
+        ins_scaler.transform(is_matrix))
+    # is_merge_games_and_stats carries `week` but not the sortable numeric form
+    # everything downstream groups by
+    if 'week_num' not in is_meta.columns:
+        is_meta['week_num'] = is_meta['week'].map(week_to_int)
+
+    keep = [c for c in ('id', 'week', 'week_num', 'date', 'short_name',
+                        'season', 'home_team_id', 'away_team_id',
+                        'home_score_differential', 'in_season_model_preds')
+            if c in is_meta.columns]
+    merged = is_meta[keep].merge(pre_lookup, on='id', how='inner')
+    if 'home_score_differential' not in merged.columns \
+            and 'home_score_differential' in games.columns:
+        merged = merged.merge(games[['id', 'home_score_differential']],
+                              on='id', how='left')
+    if verbose:
+        print(f"  {season}: {len(merged):>4} games with both predictions")
+    return merged
+
+
 
 
 ANALYSIS_DIR = os.path.join(_REPO, 'analysis')
@@ -234,6 +249,15 @@ def _train_for_season(model_subdir, prefix, features, train_end, train_start=201
 
     subprocess.run(['cp', os.path.join(RESULTS, 'season_summaries.csv'),
                     os.path.join(d, 'temp', 'season_summaries.csv')], check=True)
+    # The in-season model reads rolling summaries, not season summaries. This
+    # function bypasses preprocess.sh, which is where that copy normally
+    # happens, so it has to do it here or in-season retraining dies on a
+    # missing file.
+    rolling = os.path.join(RESULTS, 'rolling_summaries.csv')
+    if os.path.exists(rolling):
+        subprocess.run(['cp', rolling,
+                        os.path.join(d, 'temp', 'rolling_summaries.csv')],
+                       check=True)
 
     games = pd.read_csv(GAMES_CSV, low_memory=False)
     teams = pd.read_csv(TEAMS_CSV)
@@ -280,12 +304,17 @@ def generate_expanding_predictions(seasons, reference_model_dir=None,
             print(f"  cache missing seasons {missing}; regenerating")
 
     ref = reference_model_dir or _newest_model_dir('in_season_model')
-    features, _, _ = load_model(ref, 'in_season')
+    # One feature list used to serve both models, because both trained on the
+    # same adjusted_* columns out of season_summaries. They no longer do - the
+    # in-season model trains on rolling summaries - so each gets its own, read
+    # from its own experiment file.
+    ins_features, _, _ = load_model(ref, 'in_season')
+    pre_ref = _newest_model_dir('preseason_model')
+    pre_features, _, _ = load_model(pre_ref, 'preseason')
 
     # Mirror the production estimator config for each model, so the retrained
     # per-season models are comparable to what actually ships.
     ins_params = read_experiment_field(ref, 'in_season', 'model_params')
-    pre_ref = _newest_model_dir('preseason_model')
     pre_params = read_experiment_field(pre_ref, 'preseason', 'model_params')
     if verbose:
         print(f"  retraining per season (features from {os.path.basename(ref)})")
@@ -295,10 +324,16 @@ def generate_expanding_predictions(seasons, reference_model_dir=None,
     created, frames = [], []
     for season in seasons:
         try:
-            pre_dir = _train_for_season('preseason_model', 'preseason', features, season - 1,
+            pre_dir = _train_for_season('preseason_model', 'preseason',
+                                        pre_features, season - 1,
                                         train_start, model_params=pre_params)
-            ins_dir = _train_for_season('in_season_model', 'in_season', features, season - 1,
-                                        train_start, model_params=ins_params)
+            # the in-season model starts later: the as-of-week adjustment only
+            # exists from 2016, so earlier rows would be all-NaN on 48 of its
+            # 72 columns
+            ins_dir = _train_for_season('in_season_model', 'in_season',
+                                        ins_features, season - 1,
+                                        max(train_start, INS_TRAIN_START),
+                                        model_params=ins_params)
             created += [pre_dir, ins_dir]
             df = walk_forward_season(season, pre_dir, ins_dir, verbose=False)
             if df.empty:

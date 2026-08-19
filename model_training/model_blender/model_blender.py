@@ -5,13 +5,47 @@ Created on Sat Jul 27 15:36:32 2024
 @author: wfish
 
 Learns per-week weights for combining the preseason and in-season model
-predictions, from the historical per-week files batch_prediction/temp/ holds
-(written by predict.py --model_blender True).
+predictions, from the historical per-week files batch_prediction/temp/ holds.
 
-Blending is worth roughly 1.5 MAE over either model alone; tuning the weights
-is worth about 0.16 on top of that. A flat 50/50 average therefore captures
-most of the available gain, so validate() checks the fitted weights actually
-beat it out of sample before you trust them.
+THOSE FILES MUST COME FROM WALK-FORWARD, NOT FROM predict.py
+
+Generate them with walk_forward.generate_expanding_predictions, which retrains
+both models for every season on the seasons before it. Scoring a historical
+season with today's models is recall, not prediction: on 2025 the current
+preseason model returns MAE 10.38 that way, against 13.90 when it has genuinely
+not seen the season. Weights fitted on recall load up on whichever model did the
+memorising.
+
+The weights that stood here until 2026-08-18 were fitted on a history carrying
+two faults at once - an in-season model reading its own season's final stats,
+and seasons scored by models trained on them. Refitting on an honest history
+moved every week, and moved TOWARDS the in-season model, by +0.20 to +0.48:
+
+    weeks 1-6   mean in-season weight  0.35 -> 0.58
+    weeks 7+                           0.60 -> 0.87
+
+That direction was not the expected one. The reading that fits the evidence is
+that the old history let the PRESEASON model recite, so it drew weight it had
+not earned.
+
+WHAT BLENDING IS WORTH
+
+Out of sample, each season scored by weights fitted only on earlier ones, over
+4,419 games from 2020-2025:
+
+    preseason alone   13.780
+    in-season alone   13.789
+    flat 50/50        13.114
+    fitted weights    12.769
+
+Blending is worth about 1.0 MAE over either model alone, and tuning the weights
+a further 0.345 - larger than the 0.16 recorded here before, because the two
+models are now genuinely complementary rather than two views of the same leaked
+information. Their predictions correlate +0.484, against +0.788 when the
+in-season model was also given preseason features.
+
+validate() re-runs that comparison. It is there because a flat average is a
+serious competitor and the fitted weights have to earn their place.
 """
 import os
 import re
