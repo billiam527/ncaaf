@@ -68,6 +68,7 @@ etl/summarize/results_a*/
 # Cited by research/README.md as where a finding lives; an unversioned file a
 # README points at is a broken reference for anyone who clones.
 !/analysis/preseason_lag_ablation.csv
+!/analysis/encoding_experiment.csv
 
 # The experiment files record model_params, data_features, train_season_range
 # and the test split - the entire specification of a trained model. They were
