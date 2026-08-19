@@ -735,7 +735,14 @@ if __name__ == '__main__':
 
         # preseason model
         final_file_to_predict, games_df = merge_games_and_stats(games_df, ss_edit)
-        final_file_to_predict.to_csv(predict_dir + 'features_file.csv')
+        # Written with the game id attached. Without it the feature matrix could
+        # only be matched back to a game by row position, and the slate being
+        # predicted is longer than the matrix - games whose features are
+        # incomplete are dropped - so position was never a safe join.
+        # assign() rather than a mutation: predict_games validates the columns
+        # against the scaler and an extra one would fail that check.
+        final_file_to_predict.assign(game_id=games_df['id'].values).to_csv(
+            predict_dir + 'features_file.csv', index=False)
         predicted_df, predictions = predict_games(scaler=preseason_scaler,
                                                   model=preseason_model,
                                                   predict_file=final_file_to_predict)
@@ -759,7 +766,9 @@ if __name__ == '__main__':
             is_stats = is_stats.loc[is_stats['season'] == target_season]
             is_games_df, is_final_file_to_predict = is_merge_games_and_stats(
                 games_df, is_stats, features)
-            is_final_file_to_predict.to_csv(predict_dir + 'in_season_features_file.csv')
+            is_final_file_to_predict.assign(
+                game_id=is_games_df['id'].values).to_csv(
+                    predict_dir + 'in_season_features_file.csv', index=False)
             try:
                 is_predicted_df, is_predictions = predict_games(scaler=in_season_scaler,
                                                                 model=in_season_model,
@@ -798,9 +807,9 @@ if __name__ == '__main__':
         full_df = add_team_names(full_df)
         full_df = add_market_line(full_df)
 
-        cols = ['id', 'date', 'week', 'short_name', 'away_team', 'home_team',
-                'away_team_id', 'home_team_id', 'neutral_site',
-                'preseason_model_preds', 'in_season_model_preds',
+        cols = ['id', 'season', 'date', 'week', 'short_name',
+                'away_team', 'home_team', 'away_team_id', 'home_team_id',
+                'neutral_site', 'preseason_model_preds', 'in_season_model_preds',
                 'market_margin', 'market_spread', 'edge', 'n_books']
         full_df = full_df[[c for c in cols if c in full_df.columns]]
         full_df.to_csv(predict_dir + 'predictions.csv')
