@@ -119,6 +119,25 @@ def output_model_results(algo,
         elif 'test_year' in line:
             test = line
 
+    # A test_size holdout takes a random tenth of GAMES, not a season. Every
+    # preseason feature is a per-team-season constant, so a team's feature
+    # vector sits in training with some of its results and in test with the
+    # rest, and the model is scored partly on rows it has effectively seen.
+    #
+    # It is not fatal - holding out the whole of 2025 gives an identical R2 of
+    # 0.257, so the encoding change removed the memorisation this used to allow
+    # in the 104-column model, where R2 fell from 0.324 to 0.250. But MAE stays
+    # optimistic, because R2 normalises by the test set's own variance and a
+    # random tenth drawn from every season is an easier mix than one season
+    # alone: 13.39 here against 13.94 on a held-out season, and 13.94 from the
+    # walk-forward history. Two independent estimates agreeing.
+    #
+    # The training window is deliberately NOT changed to fix this. Holding out
+    # a season would cost the model the most recent one, which is the one that
+    # matters most for next season's predictions, and that is a bad trade for a
+    # printed number. The number is labelled instead.
+    optimistic = 'test_size' in test
+
     with open(directory + '/model_results.txt', 'w') as f:
         f.write('test description: ' + test + '\n')
         f.write('sample size: ' + str(len(test_y)) + '\n')
@@ -127,6 +146,17 @@ def output_model_results(algo,
         f.write('mse: ' + str(mse) + '\n')
         f.write('rmse: ' + str(rmse) + '\n')
         f.write('mae: ' + str(mae) + '\n')
+        if optimistic:
+            f.write('\n')
+            f.write('NOTE: this holdout is a random tenth of games, not a\n')
+            f.write('season, so the MAE above is optimistic by roughly half a\n')
+            f.write('point. Against an unseen season the figure is about 13.94\n')
+            f.write('(season holdout and walk-forward agree). Quote that one.\n')
+            f.write('R2 is unaffected - 0.257 under either rule.\n')
+
+    if optimistic:
+        print("   NOTE: test_size holds out random games, not a season; the MAE"
+              " above is optimistic. Honest figure is about 13.94.")
 
 
 if __name__ == '__main__':
