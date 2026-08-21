@@ -401,6 +401,23 @@ def career_production(path=None, tkl_share=0.0, g5_discount=0.0):
     return out[['pid', 'season', 'car_ball', 'car_tkl', 'z_ball',
                 'z_tkl', 'z_disrupt', 'z_car']]
 
+# Walked forward, summing the raw career figure instead of the class-relative
+# one is a testable alternative rather than an opinion: standardising within
+# class year measurably costs prediction on the player leaderboard, so the
+# model's career term is worth the same test. Default off; the switch exists so
+# the result stays reproducible either way.
+_RAW_CAREER = os.environ.get('DB_CAREER_RAW', '0') == '1'
+
+
+def _career_col(c):
+    """Which column career_room sums. z_car unless the switch is set."""
+    if not _RAW_CAREER:
+        return 'z_car'
+    for cand in ('car_ball', 'car_prs', 'car_ball', 'car'):
+        if cand in c.columns:
+            return cand
+    return 'z_car'
+
 
 def career_room(size=ROOM_SIZE, tkl_share=0.0, members=None, career=None):
     """Class-adjusted career production the room brings in, summed.
@@ -423,11 +440,12 @@ def career_room(size=ROOM_SIZE, tkl_share=0.0, members=None, career=None):
         else:
             c = c.assign(z_car=(1 - tkl_share) * c['z_ball']
                          + tkl_share * c['z_tkl'])
+    col = _career_col(c)
     m = (room_members(size) if members is None else members).merge(
-        c[['pid', 'season', 'z_car']], on=['pid', 'season'], how='left')
-    m['z_car'] = m['z_car'].fillna(0.0)
+        c[['pid', 'season', col]], on=['pid', 'season'], how='left')
+    m[col] = m[col].fillna(0.0)
     return m.groupby(['team_id', 'season'], as_index=False).agg(
-        car_sum=('z_car', 'sum'))
+        car_sum=(col, 'sum'))
 
 
 def prior_production(path=None, career=True):
