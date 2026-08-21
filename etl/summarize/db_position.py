@@ -4,31 +4,43 @@
 WHY THIS EXISTS
 
 CFBD carries the position a programme reported, and programmes disagree about
-how much detail to give: roughly half of defensive backs are filed as the
-coarse 'DB' while the other half are split into 'S' and 'CB'. The choice is a
-reporting habit, not a fact about the player - 41% of team-seasons are mixed,
-so it is not even consistent within a roster. That leaves half the population
-without a distinction that plainly exists.
+how much detail to give: 54% of defensive backs are filed as the coarse 'DB'
+while the rest are split into 'S' and 'CB'. The choice is a reporting habit,
+not a fact about the player - 70% of team-seasons are mixed, so it is not even
+consistent within a roster. That leaves most of the population without a
+distinction that plainly exists.
 
-The labelled half trains a classifier for the unlabelled half. They are alike
-where it matters: mean tackles 27.14 against 27.15, passes defensed 3.10
-against 3.14, so the training set is not a special population.
+The labelled half trains a classifier for the unlabelled half. They are close
+but not identical: mean tackles 17.15 against 15.81, passes defensed 1.66
+against 1.50, so programmes that report the fine label carry slightly more
+productive players and the training set is mildly the better half.
 
 WHAT SEPARATES THEM
 
-Passes defensed and weight, in that order. Dropping passes defensed costs the
-model 0.075 of AUC and dropping weight 0.051, against 0.022 for tackles.
-Interceptions are worth nothing at all - alone they score AUC 0.4957, a coin
-flip, and the full distribution of picks per season is the same for both
-positions to within a percentage point. Corners convert fewer of their touches
-into interceptions and have more touches; it cancels exactly.
+Passes defensed and weight, level at the margin. Dropping either costs the
+model about 0.07 of AUC, against 0.018 for tackles - but weight scores 0.758
+alone and passes defensed only 0.584, so most of what weight knows is already
+carried by tackles while passes defensed is not duplicated anywhere.
+Interceptions are worth nothing at all - alone they score AUC 0.511, a coin
+flip, and 63.7% of corners against 65.8% of safeties record none in a season.
+Safeties convert more of their touches into picks (0.283 per pass defensed
+against 0.238) and have far fewer touches; it very nearly cancels.
 
 HOW GOOD IT IS
 
-AUC 0.87 and about 80% correct on held-out players with real measurements,
-against a 52% base rate. That is good enough to label a row on a page and not
+AUC 0.838 and 75.8% correct on held-out players with real measurements,
+against a 55% base rate. That is good enough to label a row on a page and not
 good enough to feed a rating: tested as a grading split it moved team-level
-prediction by -0.001, so nothing here is used for anything but display.
+prediction by -0.0028 (t -1.10), so nothing here is used for anything but
+display.
+
+It used to read 0.868 and 79.4%. Building the defender file from the box score
+rather than from parsed play text added 5,565 defensive backs the parser never
+named, and they are overwhelmingly backups - 11.6 career tackles against 66.2,
+0.6 passes defensed against 6.8. Scored on the men it used to cover the same
+classifier reads 0.880, better than the figure it replaces. The number fell
+because the population stopped excluding half the position, not because the
+model got worse.
 
 Usage:
     python db_position.py --out results/db_position.csv
