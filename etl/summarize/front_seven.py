@@ -83,6 +83,71 @@ MIN_COVERAGE = 0.5
 from tiers import tier_series  # noqa: E402
 
 
+
+# Recency and class handling for the career figure. A flat sum treats a season
+# three years ago as fully as last season, which put a man whose last year was
+# two coverage events at the top of the file. CAREER_DECAY=1.0 restores the
+# flat behaviour.
+CAREER_DECAY = 0.5
+CAREER_CLASS_CAP = 4        # fifth and sixth-year men count as seniors
+
+
+# Opponent adjustment for the career term, off unless asked for. The team
+# metrics have always been opponent-adjusted; the player term never was, which
+# let a sack against an FCS line weigh what one against Texas weighed.
+# Walked forward 2019-2025 this costs +0.0138 MAE (t +2.05, worse in 6 of 7
+# seasons) - a tenth of a percent, accepted knowingly for ratings that survive
+# being looked at. F7_OPP_ADJ=0 restores the raw career term.
+OPP_ADJ = os.environ.get('F7_OPP_ADJ', '1') == '1'
+OPP_PATH = os.path.join(_HERE, 'results', 'player_opponent_adjust.csv')
+
+
+def _opponent_adjust(out):
+    """Swap raw pressure for the figure weighted by the lines it came against.
+
+    A player-season with no adjusted row keeps its raw value rather than
+    becoming a zero - the adjustment is a reweighting, not a filter.
+    """
+    if not OPP_ADJ:
+        return out
+    if not os.path.exists(OPP_PATH):
+        print(f"  F7_OPP_ADJ set but {OPP_PATH} is missing; using raw")
+        return out
+    a = pd.read_csv(OPP_PATH)
+    a['pid'] = a['pid'].astype(str).str.replace(r'\.0$', '', regex=True)
+    out = out.merge(a[['season', 'pid', 'prs_adj']],
+                    on=['season', 'pid'], how='left')
+    hit = out['prs_adj'].notna().sum()
+    print(f"  opponent-adjusted career: {hit:,} of {len(out):,} "
+          f"player-seasons matched")
+    out['prs'] = out['prs_adj'].fillna(out['prs'])
+    return out.drop(columns=['prs_adj'])
+
+
+def decay_sum(out, col, lam=CAREER_DECAY):
+    """Running per-player sum with each earlier season weighted lam ** gap.
+
+    Decays by the real year gap, not by row position - a man who missed a
+    season should lose two years of weight, not one.
+    """
+    if lam >= 1.0:
+        return out.groupby('pid')[col].cumsum()
+    run, prev_pid, prev_s, acc = [], None, None, 0.0
+    for pid, s, v in zip(out['pid'], out['season'], out[col]):
+        acc = 0.0 if pid != prev_pid else acc * lam ** (s - prev_s)
+        acc += v
+        run.append(acc)
+        prev_pid, prev_s = pid, s
+    return run
+
+
+def class_key(out):
+    """Standardise within class year, seniors and beyond pooled."""
+    if not out['class_yr'].notna().any():
+        return ['season']
+    out['class_bin'] = out['class_yr'].clip(upper=CAREER_CLASS_CAP)
+    return ['season', 'class_bin']
+
 def first_recruit_id(value):
     try:
         parsed = ast.literal_eval(str(value))
@@ -133,8 +198,9 @@ def career_production(path=None):
     d['prs'] = (d['sack_best'].fillna(0) + 0.5 * d['tfl_box'].fillna(0)
                 + 0.25 * d['hurry_best'].fillna(0))
     out = d.groupby(['pid', 'season'], as_index=False)['prs'].sum()
+    out = _opponent_adjust(out)
     out = out.sort_values(['pid', 'season'])
-    out['car_prs'] = out.groupby('pid')['prs'].cumsum()
+    out['car_prs'] = decay_sum(out, 'prs')
     out['season'] += 1
     try:
         import sys as _s
@@ -146,7 +212,7 @@ def career_production(path=None):
                         on=['pid', 'season'], how='left')
     except Exception:
         out['class_yr'] = np.nan
-    key = ['season', 'class_yr'] if out['class_yr'].notna().any() else ['season']
+    key = class_key(out)
     g = out.groupby(key, dropna=False)['car_prs']
     out['z_car'] = (((out['car_prs'] - g.transform('mean'))
                      / g.transform('std').replace(0, np.nan)).fillna(0.0))
