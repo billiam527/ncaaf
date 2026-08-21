@@ -74,6 +74,51 @@ from tiers import power_series  # noqa: E402
 TEAM_NAME = {}          # filled in main(), used by the tier rule
 
 
+
+# Recency and class handling for the career figure. A flat sum treats a season
+# three years ago as fully as last season, which put a man whose last year was
+# two coverage events at the top of the file. CAREER_DECAY=1.0 restores the
+# flat behaviour.
+# Blend of the three career measures. Ball events only is what ships,
+# and a walk-forward is why. A grid over 55 mixes put 0.6/0.1/0.3
+# highest at +0.0113 correlation with next season's pass defence,
+# t +1.96 - but scored on game predictions, each season fitted on
+# prior seasons only, that mix came out 0.009 MAE WORSE (t +1.71,
+# 5,192 games, ATS unchanged at 50.2%). The in-sample gain was the
+# maximum of a grid and did not survive. Kept switchable so the
+# result can be reproduced, not because it is a candidate.
+CAREER_BALL = float(os.environ.get('CAREER_BALL', '1.0'))
+CAREER_TKL = float(os.environ.get('CAREER_TKL', '0.0'))
+CAREER_DISRUPT = float(os.environ.get('CAREER_DISRUPT', '0.0'))
+
+CAREER_DECAY = 0.5
+CAREER_CLASS_CAP = 4        # fifth and sixth-year men count as seniors
+
+
+def decay_sum(out, col, lam=CAREER_DECAY):
+    """Running per-player sum with each earlier season weighted lam ** gap.
+
+    Decays by the real year gap, not by row position - a man who missed a
+    season should lose two years of weight, not one.
+    """
+    if lam >= 1.0:
+        return out.groupby('pid')[col].cumsum()
+    run, prev_pid, prev_s, acc = [], None, None, 0.0
+    for pid, s, v in zip(out['pid'], out['season'], out[col]):
+        acc = 0.0 if pid != prev_pid else acc * lam ** (s - prev_s)
+        acc += v
+        run.append(acc)
+        prev_pid, prev_s = pid, s
+    return run
+
+
+def class_key(out):
+    """Standardise within class year, seniors and beyond pooled."""
+    if not out['class_yr'].notna().any():
+        return ['season']
+    out['class_bin'] = out['class_yr'].clip(upper=CAREER_CLASS_CAP)
+    return ['season', 'class_bin']
+
 def first_recruit_id(value):
     try:
         parsed = ast.literal_eval(str(value))
@@ -306,6 +351,10 @@ def career_production(path=None, tkl_share=0.0, g5_discount=0.0):
     d['pid'] = d['pid'].astype(str)
     d['ball'] = d['pd_best'].fillna(0) + 2 * d['intercept'].fillna(0)
     d['tkl'] = d['tot_box'].fillna(0)
+    # Tackles for loss and sacks: a defensive back has to make one of
+    # these, where a tackle is largely a proxy for time on the field.
+    d['disrupt'] = (d['tfl_box'].fillna(0)
+                    + 2 * d['sack_box'].fillna(0))
     if g5_discount:
         T = pd.read_csv(TALENT, low_memory=False)[
             ['team_id', 'season', 'conference']].drop_duplicates(
@@ -316,11 +365,12 @@ def career_production(path=None, tkl_share=0.0, g5_discount=0.0):
                     on=['team_id', 'season'], how='left')
         d['ball'] = np.where(d['power'].fillna(False).astype(bool), d['ball'],
                              np.maximum(d['ball'] - g5_discount, 0.0))
-    out = d.groupby(['pid', 'season'], as_index=False)[['ball', 'tkl']].sum()
+    out = d.groupby(['pid', 'season'], as_index=False)[
+        ['ball', 'tkl', 'disrupt']].sum()
     out = out.sort_values(['pid', 'season'])
-    g0 = out.groupby('pid')
-    out['car_ball'] = g0['ball'].cumsum()
-    out['car_tkl'] = g0['tkl'].cumsum()
+    out['car_ball'] = decay_sum(out, 'ball')
+    out['car_tkl'] = decay_sum(out, 'tkl')
+    out['car_disrupt'] = decay_sum(out, 'disrupt')
     out['season'] += 1
 
     try:
@@ -332,15 +382,24 @@ def career_production(path=None, tkl_share=0.0, g5_discount=0.0):
     except Exception:
         out['class_yr'] = np.nan
     # within class where we know it, within season where we do not
-    key = ['season', 'class_yr'] if out['class_yr'].notna().any() else ['season']
-    for src, dst in (('car_ball', 'z_ball'), ('car_tkl', 'z_tkl')):
+    key = class_key(out)
+    for src, dst in (('car_ball', 'z_ball'), ('car_tkl', 'z_tkl'),
+                     ('car_disrupt', 'z_disrupt')):
         g = out.groupby(key, dropna=False)[src]
         out[dst] = (((out[src] - g.transform('mean'))
                      / g.transform('std').replace(0, np.nan)).fillna(0.0))
-    out['z_car'] = ((1 - tkl_share) * out['z_ball']
-                    + tkl_share * out['z_tkl'])
-    return out[['pid', 'season', 'car_ball', 'car_tkl', 'z_ball', 'z_tkl',
-                'z_car']]
+    # Three-way blend. CAREER_BALL/TKL/DISRUPT default to the shipped
+    # ball-only figure; set them to test another mix.
+    if CAREER_DISRUPT or CAREER_BALL != 1.0:
+        tot = CAREER_BALL + CAREER_TKL + CAREER_DISRUPT
+        out['z_car'] = ((CAREER_BALL * out['z_ball']
+                         + CAREER_TKL * out['z_tkl']
+                         + CAREER_DISRUPT * out['z_disrupt']) / tot)
+    else:
+        out['z_car'] = ((1 - tkl_share) * out['z_ball']
+                        + tkl_share * out['z_tkl'])
+    return out[['pid', 'season', 'car_ball', 'car_tkl', 'z_ball',
+                'z_tkl', 'z_disrupt', 'z_car']]
 
 
 def career_room(size=ROOM_SIZE, tkl_share=0.0, members=None, career=None):
@@ -353,8 +412,17 @@ def career_room(size=ROOM_SIZE, tkl_share=0.0, members=None, career=None):
     if not len(c):
         return pd.DataFrame(columns=['team_id', 'season', 'car_sum'])
     if career is not None:
-        c = c.assign(z_car=(1 - tkl_share) * c['z_ball']
-                     + tkl_share * c['z_tkl'])
+        # Same rule as career_production, or a three-way blend set
+        # there is thrown away here and the caller sees no change.
+        if CAREER_DISRUPT or CAREER_BALL != 1.0:
+            tot = CAREER_BALL + CAREER_TKL + CAREER_DISRUPT
+            c = c.assign(z_car=(CAREER_BALL * c['z_ball']
+                                + CAREER_TKL * c['z_tkl']
+                                + CAREER_DISRUPT * c['z_disrupt'])
+                         / tot)
+        else:
+            c = c.assign(z_car=(1 - tkl_share) * c['z_ball']
+                         + tkl_share * c['z_tkl'])
     m = (room_members(size) if members is None else members).merge(
         c[['pid', 'season', 'z_car']], on=['pid', 'season'], how='left')
     m['z_car'] = m['z_car'].fillna(0.0)
