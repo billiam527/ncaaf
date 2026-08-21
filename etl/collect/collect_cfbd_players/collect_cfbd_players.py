@@ -47,8 +47,12 @@ KEY_FILE = os.path.expanduser('~/.cfbd_api_key')
 # their own. Asking for earlier years returns empty lists, not errors.
 FIRST_USABLE_YEAR = 2014
 
+# 'interceptions' is a category of its own - the 'defensive' one
+# carries TOT/SOLO/TFL/SACKS/PD/QB HUR but no picks. Leaving it out
+# forced defensive_production to parse them from play text, which
+# counts penalty-nullified plays and duplicated rows.
 STAT_CATEGORIES = ('passing', 'rushing', 'receiving',
-                   'defensive', 'kicking', 'punting')
+                   'defensive', 'interceptions', 'kicking', 'punting')
 
 
 def load_cfbd_key():
@@ -155,6 +159,53 @@ def collect_player_games(year, headers, pause=0.3):
     return pd.concat(frames, ignore_index=True)
 
 
+def collect_game_box(year, headers, pause=0.3):
+    """Per-game box scores, which is season stats with the opponent attached.
+
+    /stats/player/season gives a defender's nine sacks as one number. This
+    gives the same nine split by game, so each one can be weighted by the line
+    it came against. Shape is game -> team -> category -> statType -> athlete,
+    flattened here to one row per athlete-stat with both sides of the fixture
+    named, because the opponent is the whole point of collecting it.
+
+    A week at a time, like the PPA pull: the endpoint wants a week when no team
+    is given.
+    """
+    rows = []
+    for season_type in ('regular', 'postseason'):
+        weeks = range(1, 17) if season_type == 'regular' else range(1, 6)
+        for week in weeks:
+            recs = fetch('/games/players', headers,
+                         {'year': year, 'week': week,
+                          'seasonType': season_type})
+            if not recs:
+                continue
+            for game in recs:
+                teams = game.get('teams') or []
+                sides = [t.get('team') for t in teams]
+                for t in teams:
+                    opp = next((s for s in sides if s != t.get('team')), None)
+                    for cat in (t.get('categories') or []):
+                        for typ in (cat.get('types') or []):
+                            for a in (typ.get('athletes') or []):
+                                rows.append({
+                                    'season': year,
+                                    'week': week,
+                                    'seasonType': season_type,
+                                    'game_id': game.get('id'),
+                                    'team': t.get('team'),
+                                    'opponent': opp,
+                                    'homeAway': t.get('homeAway'),
+                                    'category': cat.get('name'),
+                                    'statType': typ.get('name'),
+                                    'playerId': a.get('id'),
+                                    'player': a.get('name'),
+                                    'stat': a.get('stat'),
+                                })
+            time.sleep(pause)
+    return pd.DataFrame(rows)
+
+
 def collect_year(year, headers):
     """Every per-year source for one season, as {name: DataFrame}."""
     out = {}
@@ -198,6 +249,11 @@ def main():
                          'season; needed for the opponent adjustment)')
     ap.add_argument('--only-player-games', action='store_true',
                     help='pull only the per-game PPA, leaving other files alone')
+    ap.add_argument('--game-box', action='store_true',
+                    help='also pull per-game box scores (about 20 requests per '
+                         'season; gives every stat an opponent)')
+    ap.add_argument('--only-game-box', action='store_true',
+                    help='pull only the per-game box scores')
     args = ap.parse_args()
 
     key = load_cfbd_key()
@@ -230,7 +286,7 @@ def main():
     collected = {}
     for year in range(args.start_year, args.end_year + 1):
         print(f"\n{year}")
-        if not args.only_player_games:
+        if not args.only_player_games and not args.only_game_box:
             try:
                 year_data = collect_year(year, headers)
             except RuntimeError as exc:
@@ -245,6 +301,12 @@ def main():
                   f"  ({pg['opponent'].nunique() if len(pg) else 0} opponents)")
             if len(pg):
                 collected.setdefault('player_games', []).append(pg)
+        if args.game_box or args.only_game_box:
+            gb = collect_game_box(year, headers, args.pause)
+            games = gb['game_id'].nunique() if len(gb) else 0
+            print(f"  {'game_box':<10} {len(gb):>7} rows  ({games} games)")
+            if len(gb):
+                collected.setdefault('game_stats', []).append(gb)
         time.sleep(args.pause)
 
     print()
