@@ -205,19 +205,64 @@ def merge_box_scores(wide):
             wide[c] = np.nan
         return finalise(wide)
     st = pd.read_csv(path, low_memory=False)
-    st = st[st['category'] == 'defensive'].copy()
+    st = st[st['category'].isin(['defensive', 'interceptions'])].copy()
     st['stat'] = pd.to_numeric(st['stat'], errors='coerce')
     st['playerId'] = st['playerId'].astype(str)
     box = st.pivot_table(index=['season', 'playerId'], columns='statType',
                          values='stat', aggfunc='sum').reset_index()
     box.columns.name = None
     ren = {'PD': 'pd_box', 'SACKS': 'sack_box', 'QB HUR': 'hurry_box',
-           'TFL': 'tfl_box', 'TOT': 'tot_box'}
+           'TFL': 'tfl_box', 'TOT': 'tot_box', 'INT': 'int_box'}
     box = box.rename(columns=ren)
     keep = ['season', 'playerId'] + [v for v in ren.values() if v in box.columns]
     wide['pid'] = wide['pid'].astype(str)
+
+    # BOX_SPINE: the box score defines who exists, not the play-text parser.
+    # A left join here dropped every defender the parser never named - 63.8% of
+    # FBS defender-seasons, 29.4% of tackles, 26.1% of interceptions.
+    before = len(wide)
     wide = wide.merge(box[keep].rename(columns={'playerId': 'pid'}),
+                      on=['season', 'pid'], how='outer')
+    added = len(wide) - before
+
+    # Identity for the rows the box score brought in.
+    meta = (st.sort_values('season')
+              .groupby(['season', 'playerId'], as_index=False)
+              .agg(who_box=('player', 'last'), team_box=('team', 'last'),
+                   pos_box=('position', 'last')))
+    meta['playerId'] = meta['playerId'].astype(str)
+    wide = wide.merge(meta.rename(columns={'playerId': 'pid'}),
                       on=['season', 'pid'], how='left')
+    wide['who'] = wide['who'].fillna(wide['who_box'])
+    wide['pos'] = wide['pos'].fillna(wide['pos_box'])
+
+    tpath = os.path.join(PLAYER_DIR, 'cfbd_teams.csv')
+    if os.path.exists(tpath):
+        tm = pd.read_csv(tpath)
+        idc = 'id' if 'id' in tm.columns else 'team_id'
+        name2id = {}
+        for c in ('school', 'team', 'name', 'alt_name1'):
+            if c in tm.columns:
+                for nm, i in zip(tm[c], tm[idc]):
+                    if isinstance(nm, str) and nm not in name2id:
+                        name2id[nm] = int(i)
+        wide['team_id'] = wide['team_id'].fillna(
+            wide['team_box'].map(name2id))
+    wide = wide.drop(columns=['who_box', 'team_box', 'pos_box'])
+
+    # No parsed event was found for these men, which is exactly zero, not
+    # unknown - the box columns carry what they actually did.
+    for c in ('breakup', 'forced', 'hurry', 'intercept', 'sack'):
+        if c in wide.columns:
+            wide[c] = wide[c].fillna(0.0)
+
+    lost = wide['team_id'].isna().sum()
+    if lost:
+        print(f"  {lost:,} box rows dropped for an unmappable team name")
+        wide = wide[wide['team_id'].notna()]
+    wide['team_id'] = wide['team_id'].astype(int)
+    print(f"  box score added {added:,} defender-seasons the play text "
+          f"never named ({added / max(len(wide), 1):.1%} of the file)")
 
     print("\n  play-by-play against the official box score, where both exist:")
     for pbp_col, box_col, lab in (('breakup', 'pd_box', 'breakups / PD'),
@@ -238,6 +283,14 @@ def merge_box_scores(wide):
 
 def finalise(wide):
     """Prefer the official count, fall back to the parsed one."""
+    if 'int_box' in wide.columns:
+        # Present in the box score that season but absent from the
+        # interceptions category means none, not unknown.
+        carried = wide['tot_box'].notna()
+        wide['int_box'] = wide['int_box'].mask(
+            wide['int_box'].isna() & carried, 0.0)
+        wide['intercept_pbp'] = wide['intercept']
+        wide['intercept'] = wide['int_box'].fillna(wide['intercept'])
     for out, pbp_col, box_col in (('pd_best', 'breakup', 'pd_box'),
                                   ('sack_best', 'sack', 'sack_box'),
                                   ('hurry_best', 'hurry', 'hurry_box')):
