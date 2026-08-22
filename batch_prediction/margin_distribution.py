@@ -210,14 +210,62 @@ def season_weights(seasons, half_life=HALF_LIFE, reference=None):
     return 0.5 ** ((ref - seasons) / half_life)
 
 
-def fbs_games():
+def games_by_regime():
+    """The two regimes, kept apart, because they are not one population.
+
+    Dropping crossover games entirely was the old behaviour, and it left the
+    ~150 FBS-vs-FCS games a season being shaped by a curve fitted on games that
+    look nothing like them:
+
+                          FBS v FBS   crossover
+      sd                      21.01       24.78
+      |margin| > 28           18.5%       39.7%
+      lands exactly on 3       9.75%       6.07%
+      lands exactly on 7       8.44%       5.25%
+
+    Both halves of the distribution differ, not only the width. A blowout does
+    not end on a field-goal margin, so crossover games hit key numbers about a
+    third less often - which means a shared lumpiness curve with a per-regime
+    sigma would still be wrong.
+
+    Returns {'fbs': df, 'cross': df}. The 'fbs' frame is exactly what
+    fbs_games() always returned, so anything predicting only FBS games is
+    unaffected.
+    """
     g = pd.read_csv(GAMES, low_memory=False)
     t = pd.read_csv(TEAMS)
     fbs = set(t.loc[t['fbs_ind'] == 1.0, 'id'])
-    g = g[g.home_team_id.isin(fbs) & g.away_team_id.isin(fbs)]
     g = g.dropna(subset=['home_score_differential', 'season']).copy()
     g['margin'] = g['home_score_differential'].round().astype(int)
-    return g[['season', 'margin']]
+    h, a = g.home_team_id.isin(fbs), g.away_team_id.isin(fbs)
+    return {'fbs': g[h & a][['season', 'margin']],
+            'cross': g[h ^ a][['season', 'margin']]}
+
+
+def regime_sigma_scale(half_life=HALF_LIFE):
+    """How much wider the crossover regime is, as a multiplier on sigma.
+
+    Sigma is fitted from model residuals, and the walk-forward history holds
+    FBS games only, so there is no crossover residual to measure directly. The
+    ratio of raw outcome spreads is the honest stand-in: it is what the two
+    regimes' widths actually differ by, and it is applied rather than assumed
+    to be 1.0, which is what dropping the games amounted to.
+    """
+    r = games_by_regime()
+    a = r['fbs']['margin'].to_numpy(float)
+    b = r['cross']['margin'].to_numpy(float)
+    if len(b) < 200:
+        return 1.0
+    wa = season_weights(r['fbs']['season'].to_numpy(float), half_life)
+    wb = season_weights(r['cross']['season'].to_numpy(float), half_life)
+    va = np.average((a - np.average(a, weights=wa)) ** 2, weights=wa)
+    vb = np.average((b - np.average(b, weights=wb)) ** 2, weights=wb)
+    return float(np.sqrt(vb / va)) if va > 0 else 1.0
+
+
+def fbs_games():
+    """Kept so existing callers keep their exact behaviour."""
+    return games_by_regime()['fbs']
 
 
 def key_number_weights(games, half_life=HALF_LIFE):

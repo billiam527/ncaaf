@@ -68,10 +68,29 @@ DECAY = DECAY / DECAY.sum()
 
 
 def load_games():
+    """Every game with at least one FBS team, not only FBS against FBS.
+
+    Requiring both sides threw away about 150 crossover games a season, and
+    left the 127 FCS games on the 2026 slate to be predicted with one side's
+    features missing. XGBoost accepts NaN, so it silently learned a constant of
+    roughly +18 for every FCS opponent - treating North Dakota State, who beat
+    FBS teams, as Mercyhurst, who were Division II two years ago.
+
+    Season summaries cover 117 FCS teams, about 100 per recent season, so the
+    FCS side of a crossover game is described by real per-season data exactly
+    as an FBS side is: 52 columns a side, 100% populated. Predicting these
+    games from the full matrix beats the eight position ratings by 1.87 MAE
+    (se 0.416, t -4.50) and a flat constant by 6.3, over 418 games in 2019,
+    2020, 2024 and 2025.
+
+    Teams with no summaries - new programmes, and a few Division II opponents -
+    are dropped by the merge downstream, which is the right place for it: that
+    is the join which actually needs the data.
+    """
     g = pd.read_csv(GAMES, low_memory=False)
     t = pd.read_csv(TEAMS)
     fbs = set(t.loc[t['fbs_ind'] == 1.0, 'id'])
-    g = g[g.home_team_id.isin(fbs) & g.away_team_id.isin(fbs)]
+    g = g[g.home_team_id.isin(fbs) | g.away_team_id.isin(fbs)]
     return g[g['home_score_differential'].notna()]
 
 
