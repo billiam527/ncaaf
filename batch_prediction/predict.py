@@ -743,12 +743,41 @@ SPREAD_FILE = os.path.normpath(os.path.join(
     '..', 'etl', 'collect', 'collect_cfbd_games', 'cfbd_spread_data.csv'))
 
 
+CFBD_TEAMS_FILE = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    '..', 'etl', 'collect', 'collect_cfbd_players', 'temp', 'cfbd_teams.csv'))
+
+
+def team_name_map():
+    """ESPN's team list, with CFBD filling the holes in it.
+
+    ESPN's teams endpoint returns 758 schools and misses new programmes. UT Rio
+    Grande Valley played its first season in 2025 and is not in it, so UTSA's
+    2026 opener carried a blank opponent - the only unresolvable team in the
+    whole 888-game slate.
+
+    The two files share an id space: 664 ids appear in both and 663 of them
+    carry identical names, so this fills by id rather than by matching text.
+    ESPN is loaded second and wins any disagreement, because every other name
+    in the pipeline comes from it.
+    """
+    name = {}
+    if os.path.exists(CFBD_TEAMS_FILE):
+        c = pd.read_csv(CFBD_TEAMS_FILE, low_memory=False)
+        if {'id', 'school'} <= set(c.columns):
+            name.update(dict(zip(pd.to_numeric(c['id'], errors='coerce'),
+                                 c['school'])))
+    if os.path.exists(TEAMS_FILE):
+        t = pd.read_csv(TEAMS_FILE)
+        name.update(dict(zip(t['id'], t['location'])))
+    return name
+
+
 def add_team_names(df):
     """Readable names beside the ESPN ids, so the file can be read directly."""
-    if not os.path.exists(TEAMS_FILE):
+    name = team_name_map()
+    if not name:
         return df
-    t = pd.read_csv(TEAMS_FILE)
-    name = dict(zip(t['id'], t['location']))
     for side in ('home', 'away'):
         col = f'{side}_team_id'
         if col in df.columns:
