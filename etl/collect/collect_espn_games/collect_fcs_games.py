@@ -43,11 +43,22 @@ os.makedirs(OUT, exist_ok=True)
 
 
 def season_dates(y):
-    """Mid-August through mid-January covers the regular season and playoffs."""
+    """Mid-August through mid-January covers a normal season and its playoffs.
+
+    2020 was not normal. COVID moved most of the FCS season to spring 2021, so
+    that window returned 233 games where a season is 850-900 and missed a year
+    of results entirely. For that season only, February through May of the
+    following calendar year is requested as well.
+    """
     d, stop = date(y, 8, 15), date(y + 1, 1, 15)
     while d <= stop:
         yield d
         d += timedelta(days=1)
+    if y == 2020:
+        d, stop = date(y + 1, 2, 1), date(y + 1, 5, 31)
+        while d <= stop:
+            yield d
+            d += timedelta(days=1)
 
 
 def fetch(url, tries=3):

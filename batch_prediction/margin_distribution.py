@@ -530,6 +530,28 @@ def main():
         raise SystemExit(f"{os.path.basename(src)} has no usable prediction column")
     print(f"predictions: {len(preds)} games from {os.path.basename(src)} ({model_col})")
 
+    # An FBS-vs-FCS game is not drawn from the same distribution as an
+    # FBS-vs-FBS one: sd 24.78 against 21.01, and it lands exactly on 3 in 6.07%
+    # of games against 9.75%, because a blowout does not end on a field-goal
+    # margin. Shaping those games with the FBS curve overstated the key numbers
+    # and understated the tail. Both curves are built and each game gets its
+    # own; a slate with no crossover games is unaffected.
+    regimes = games_by_regime()
+    w_cross = key_number_weights(regimes['cross'], hl)
+    sigma_cross = sigma * regime_sigma_scale(hl)
+    fbs_ids = set(pd.read_csv(TEAMS).loc[
+        lambda t: t['fbs_ind'] == 1.0, 'id'])
+
+    def is_cross(r):
+        h, a = r.get('home_team_id'), r.get('away_team_id')
+        if pd.isna(h) or pd.isna(a):
+            return False
+        return (int(h) in fbs_ids) ^ (int(a) in fbs_ids)
+
+    n_cross = int(sum(is_cross(r) for _, r in preds.iterrows()))
+    print(f"  regimes: {len(preds) - n_cross} FBS-vs-FBS on sigma {sigma:.2f}, "
+          f"{n_cross} crossover on sigma {sigma_cross:.2f}")
+
     rows = []
     for _, r in preds.iterrows():
         if pd.isna(r[model_col]):
@@ -537,7 +559,10 @@ def main():
             continue
         centre = (float(calibrator.predict([r[model_col]])[0])
                   if calibrator is not None else float(r[model_col])) + offset
-        p = distribution(centre, weights, sigma)
+        cross = is_cross(r)
+        p = distribution(centre,
+                         w_cross if cross else weights,
+                         sigma_cross if cross else sigma)
         s = {'calibrated_margin': round(centre, 2)}
         s.update(summarise(p, r.get('market_margin', np.nan)))
         # add_market_lines computes `edge` from the raw blend, before the drift
