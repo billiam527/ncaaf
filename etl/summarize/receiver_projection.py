@@ -378,6 +378,19 @@ def project_players(prod, roster, recruits, season, model):
             columns={'id': 'rid'}), on='rid', how='left')
     # a year older than his last recorded season, not than his last on a roster
     r['exp'] = r['prev_exp'] + (season - r['prev_season'])
+    # Experience comes from the recruiting class year, reached through
+    # roster.recruitIds. 950 of the 2026 receivers have no such link - walk-ons,
+    # juco arrivals, anyone whose recruiting row never matched - and for them
+    # exp was NaN, so the dropna below removed them from the room no matter how
+    # much production they had. That cost 79 of 463 returning receivers,
+    # including men with 224 and 146 career catches. A recruiting gap was
+    # deciding a production question.
+    #
+    # The roster's own eligibility year covers 100% of them and is the right
+    # fallback: year 1 is a first-year player, so exp is year - 1.
+    if 'year' in r.columns:
+        r['exp'] = r['exp'].fillna(
+            pd.to_numeric(r['year'], errors='coerce') - 1)
     r = r.dropna(subset=['z_value', 'receptions', 'exp'])
     r['lt'] = np.log(r['receptions'].clip(lower=1))
     r['zt'] = r['z_value'] * r['lt']

@@ -253,6 +253,13 @@ def main():
         # a year older than his last recorded season, not than his last roster
         # appearance - a back who missed a year should not age twice for it
         r['exp'] = r['prev_exp'] + (season - r['prev_season'])
+        # and the roster's eligibility year where the recruiting link is
+        # missing, which is 11% of backs with production. See the note in
+        # receiver_projection: a recruiting gap should not decide whether a
+        # man with carries appears at all.
+        if 'year' in r.columns:
+            r['exp'] = r['exp'].fillna(
+                pd.to_numeric(r['year'], errors='coerce') - 1)
 
         has = r['z_value'].notna() & r['carries'].notna()
         r['projected'] = np.nan
