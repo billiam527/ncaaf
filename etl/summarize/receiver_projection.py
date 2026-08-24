@@ -168,86 +168,98 @@ MIN_BAND = 30
 
 
 def fit_freshman(prod, roster, recruits, rating_mu, rating_sd):
-    """Derive the freshman model from finished careers.
+    """Derive the no-record model from finished careers.
 
-    Two quantities, and using either alone is wrong. Most of a signing class
-    never reaches a qualifying season at all, which is the larger half of the
-    uncertainty; and among those who do, the grade says only a little about how
-    good the first season is.
+    Both halves have to describe THE SAME SEASON. An earlier version paired
+    P(ever reaches a qualifying season) with the value of whichever season that
+    turned out to be, which is not a projection of anything: a five-star who
+    first qualifies as a junior sits in the 81% who ever qualify and contributes
+    nothing to next year. That pairing understated a five-star signee five-fold,
+    +0.046 against a measured +0.227, while making a three-star twice too
+    negative.
 
-    Returns (play_rate, te_factor, a, b, skill) where play_rate is keyed by
-    star band and describes wide receivers, te_factor scales it for tight ends,
-    and a + b*z_rating is the expected first-season value given he plays.
+    So this is a hazard: given he is on a roster this season and has no
+    qualifying season behind him, what is the chance he qualifies NOW, and how
+    good is he if he does. Both terms condition on the grade and on years since
+    signing, because an incoming freshman and a redshirt junior with the same
+    grade are different cases and project_freshmen sees both.
+
+    Returns (play_model, val_model, skill).
     """
-    from sklearn.linear_model import LinearRegression
-    rc = recruits.dropna(subset=['class_year', 'stars']).copy()
+    from sklearn.linear_model import LinearRegression, LogisticRegression
+    rc = recruits.dropna(subset=['class_year', 'rating']).copy()
     rc = rc[rc['class_year'].between(FIRST_FINISHED_CLASS,
                                      LAST_FINISHED_CLASS)]
-    if rc.empty:
-        return PLAY_RATE, TE_PLAY_FACTOR, FRESH_A, FRESH_B, np.nan
+    if rc.empty or 'pid' not in rc.columns:
+        return None, None, np.nan
 
-    # The denominator is every recruit signed at the position, not every one who
-    # later turned up on a roster. A three-star who never makes a roster is
-    # exactly the case the rate exists to price, and dropping him would make
-    # p_play read as "given he stuck around", which is not what it multiplies.
+    # the season each man first qualified, and how good it was
     first = (prod.sort_values('season').groupby('rec_id')
-             .agg(first_z=('z_value', 'first')).reset_index())
+             .agg(first_season=('season', 'first'),
+                  first_z=('z_value', 'first')).reset_index())
     rc = rc.merge(first, left_on='pid', right_on='rec_id', how='left')
-    rc['played'] = rc['first_z'].notna()
 
-    # A logistic on the grade itself rather than a rate per star band. Bands
-    # are the wrong tool: once the classes are bounded to 2014-2021 only 24
-    # five-star receivers remain, which is too few to rate on its own and was
-    # silently falling back to a stale constant while every other band was
-    # fitted. The logistic borrows strength from the four-stars and returns a
-    # probability for any grade, with the tight-end discount as a coefficient
-    # rather than a separately measured ratio.
-    from sklearn.linear_model import LogisticRegression
-    rc = rc.assign(rz=(rc['rating'] - rating_mu) / rating_sd,
-                   is_te=(rc['position'] == 'TE').astype(float))
-    fit = rc.dropna(subset=['rz', 'played'])
-    play_model = None
-    if len(fit) > 200 and fit['played'].nunique() > 1:
-        # fitted on a bare array so predict_proba on one later does not warn
-        # about missing feature names
-        play_model = LogisticRegression(max_iter=1000).fit(
-            fit[['rz', 'is_te']].to_numpy(float),
-            fit['played'].astype(int).to_numpy())
+    # One row per season a man is on a roster with no qualifying season yet -
+    # exactly the population project_freshmen is applied to. A man who has
+    # already qualified leaves the risk set; one who never qualifies stays in
+    # it for as long as he is rostered, which is what makes the rate a hazard
+    # rather than a career total.
+    ros = roster[roster['position'].isin(ROOM_POSITIONS)].copy()
+    ros = ros.dropna(subset=['rid'])[['rid', 'season', 'position']]
+    panel = ros.merge(rc[['rid', 'rating', 'stars', 'class_year',
+                          'first_season', 'first_z']], on='rid', how='inner')
+    panel['age'] = panel['season'] - panel['class_year']
+    panel = panel[panel['age'].between(0, 4)]
+    at_risk = panel[panel['first_season'].isna()
+                    | (panel['season'] <= panel['first_season'])].copy()
+    at_risk['qualifies'] = (at_risk['season'] == at_risk['first_season'])
+    at_risk['rz'] = (at_risk['rating'] - rating_mu) / rating_sd
+    at_risk['is_te'] = (at_risk['position'] == 'TE').astype(float)
+    # a squared term because the grade bends at the top: fitted straight, the
+    # 2,000-odd three-stars set the slope and the five-stars are missed
+    at_risk['rz2'] = at_risk['rz'] ** 2
 
-    # conditional on playing, the grade against the first qualifying season
-    q = rc[rc['played']].dropna(subset=['rating', 'first_z'])
-    a, b, skill = FRESH_A, FRESH_B, np.nan
+    XP = ['rz', 'rz2', 'age', 'is_te']
+    play_model = val_model = None
+    fit = at_risk.dropna(subset=XP + ['qualifies'])
+    if len(fit) > 500 and fit['qualifies'].nunique() > 1:
+        play_model = LogisticRegression(max_iter=2000).fit(
+            fit[XP].to_numpy(float), fit['qualifies'].astype(int).to_numpy())
+
+    # value given he qualifies THIS season, on the same conditioning
+    q = fit[fit['qualifies']].dropna(subset=['first_z'])
+    skill = np.nan
     if len(q) > 100:
-        q = q.assign(rz=(q['rating'] - rating_mu) / rating_sd)
         cut = q['class_year'].quantile(0.7)
         tr, te_ = q[q['class_year'] <= cut], q[q['class_year'] > cut]
         if len(te_) > 30:
-            m0 = LinearRegression().fit(tr[['rz']], tr['first_z'])
-            skill = np.corrcoef(m0.predict(te_[['rz']]), te_['first_z'])[0, 1]
-        m = LinearRegression().fit(q[['rz']], q['first_z'])
-        a, b = float(m.intercept_), float(m.coef_[0])
+            m0 = LinearRegression().fit(tr[XP].to_numpy(float),
+                                        tr['first_z'].to_numpy())
+            skill = np.corrcoef(m0.predict(te_[XP].to_numpy(float)),
+                                te_['first_z'])[0, 1]
+        val_model = LinearRegression().fit(q[XP].to_numpy(float),
+                                           q['first_z'].to_numpy())
 
-    print(f"freshman model from {len(rc):,} finished careers "
-          f"({FIRST_FINISHED_CLASS}-{LAST_FINISHED_CLASS}), "
-          f"{rc['pid'].notna().mean():.0%} ever on a roster")
-    if play_model is not None:
-        # printed at each band's own mean grade, so the fitted curve can be
-        # read against the raw rate it is smoothing
-        parts = []
+    print(f"no-record model: {len(fit):,} rostered seasons at risk, "
+          f"{int(fit['qualifies'].sum()):,} qualified "
+          f"(classes {FIRST_FINISHED_CLASS}-{LAST_FINISHED_CLASS})")
+    if play_model is not None and val_model is not None:
+        print("  a signee entering year one, by band:")
         for st in (5, 4, 3, 2):
-            g = rc[(rc['stars'] == st) & (rc['position'] == 'WR')]
-            if not len(g):
+            g = fit[(fit['stars'] == st) & (fit['is_te'] == 0)]
+            if len(g) < 10:
                 continue
-            pz = float(g['rz'].mean())
-            p = float(play_model.predict_proba([[pz, 0.0]])[0, 1])
-            parts.append(f"{st}*={p:.0%} (raw {g['played'].mean():.0%}, "
-                         f"n={len(g)})")
-        print("  reaches a qualifying season, WR: " + '  '.join(parts))
-        te_c = play_model.coef_[0][1]
-        print(f"  tight end coefficient {te_c:+.2f} in log-odds", end='')
-    print(f"   if he plays: {a:+.3f} {b:+.3f}*grade  "
-          f"holdout r = {skill:+.3f}")
-    return play_model, a, b, skill
+            rz = float(g['rz'].mean())
+            x = np.array([[rz, rz ** 2, 0.0, 0.0]])
+            pp = float(play_model.predict_proba(x)[0, 1])
+            vv = float(val_model.predict(x)[0])
+            raw = g[g['age'] == 0]
+            print(f"    {st}*  P(qualifies) {pp:>5.0%}   if he does {vv:>+6.2f}"
+                  f"   product {pp*vv:>+6.3f}"
+                  + (f"   (raw {raw['qualifies'].mean():.0%})" if len(raw)
+                     else ''))
+        print(f"  value model holdout r = {skill:+.3f}")
+    return play_model, val_model, skill
 
 
 def project_freshmen(roster, recruits, season, rating_mu, rating_sd,
@@ -265,24 +277,30 @@ def project_freshmen(roster, recruits, season, rating_mu, rating_sd,
     Without it the module-level fallbacks are used, which is only correct if
     neither the qualification gate nor the value definition has moved.
     """
-    play_model, a, b = (fresh if fresh is not None
-                        else (None, FRESH_A, FRESH_B))
+    play_model, val_model = (fresh if fresh is not None else (None, None))
     r = roster[(roster['season'] == season)
                & (roster['position'].isin(ROOM_POSITIONS))].copy()
-    r = r.merge(recruits[['id', 'rating', 'stars']].rename(
-        columns={'id': 'rid'}), on='rid', how='left')
+    r = r.merge(recruits[['id', 'rating', 'stars', 'year']].rename(
+        columns={'id': 'rid', 'year': 'class_year'}), on='rid', how='left')
     r = r.dropna(subset=['rating', 'stars'])
     if r.empty:
         return pd.DataFrame()
-    rz = (r['rating'] - rating_mu) / rating_sd
-    if play_model is not None:
-        X = np.column_stack([rz.to_numpy(float),
-                             (r['position'] == 'TE').to_numpy(float)])
+    rz = ((r['rating'] - rating_mu) / rating_sd).to_numpy(float)
+    # years since signing. Both halves condition on it, because a man with no
+    # record entering year one and one entering year four are different bets:
+    # the first is unproven, the second has had chances and not taken them.
+    age = pd.to_numeric(r['class_year'], errors='coerce')
+    age = (season - age).clip(lower=0, upper=4).fillna(0).to_numpy(float)
+    is_te = (r['position'] == 'TE').to_numpy(float)
+    X = np.column_stack([rz, rz ** 2, age, is_te])
+
+    if play_model is not None and val_model is not None:
         r['p_play'] = play_model.predict_proba(X)[:, 1]
+        r['if_plays'] = val_model.predict(X)
     else:
         r['p_play'] = r['stars'].astype(int).map(PLAY_RATE).fillna(0.06)
         r.loc[r['position'] == 'TE', 'p_play'] *= TE_PLAY_FACTOR
-    r['if_plays'] = a + b * rz
+        r['if_plays'] = FRESH_A + FRESH_B * rz
     r['projected'] = r['p_play'] * r['if_plays']
     return r
 
@@ -440,9 +458,9 @@ def main():
     else:
         rating_sd = float(prod['rating'].std())
 
-    _pm, _fa, _fb, _fskill = fit_freshman(prod, roster, finished,
-                                          rating_mu, rating_sd)
-    FRESH = (_pm, _fa, _fb)
+    _pm, _vm, _fskill = fit_freshman(prod, roster, finished,
+                                     rating_mu, rating_sd)
+    FRESH = (_pm, _vm)
 
     model, skill, n = fit_projection(prod)
     print(f"projection fitted on {n:,} consecutive pairs, "
