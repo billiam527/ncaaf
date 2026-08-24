@@ -476,6 +476,21 @@ def main():
                      for f, c in zip(FEATURES, model.coef_))
     print(f"  next = {model.intercept_:+.3f} {terms}")
 
+    # The fitted equation, written beside the results. Any page that shows it
+    # then renders from this rather than from a figure typed into a template,
+    # which is how every other quoted coefficient in this project went stale.
+    import json as _json
+    mpath = os.path.join(os.path.dirname(args.out),
+                         'receiver_projection_model.json')
+    with open(mpath, 'w') as fh:
+        _json.dump({'intercept': float(model.intercept_),
+                    'terms': [{'feature': f, 'label': LABEL.get(f, f),
+                               'coef': float(c)}
+                              for f, c in zip(FEATURES, model.coef_)],
+                    'holdout_r': None if np.isnan(skill) else float(skill),
+                    'pairs': int(n)}, fh, indent=1)
+    print(f"  wrote {mpath}")
+
     out, players = [], []
     for season in range(args.from_season, args.season + 1):
         fbs = set(classif.loc[(classif['season'] == season)
