@@ -56,12 +56,22 @@ PLAY_RATE = {5: 0.80, 4: 0.55, 3: 0.25, 2: 0.08}
 
 
 def build_value(prod):
-    """EPA above an average back, on the same carries and catches."""
+    """EPA above an average back, on the same carries and catches.
+
+    Both halves are opponent-adjusted and neither reads a target. The receiving
+    half used the RAW epa_per_catch while the rushing half was adjusted, which
+    was an asymmetry with no argument behind it; and that raw figure divided
+    EPA over every target by receptions, so it inherited the denominator ESPN
+    stopped recording reliably in 2021-2024. adj_epa_per_catch is fitted over
+    catches only and is clean in every season.
+    """
     rush_lg = prod.groupby('season')['adj_epa_per_rush'].transform('mean')
     prod['rush_value'] = prod['carries'] * (prod['adj_epa_per_rush'] - rush_lg)
-    rec_lg = prod.groupby('season')['epa_per_catch'].transform('mean')
+    rec_col = ('adj_epa_per_catch' if 'adj_epa_per_catch' in prod.columns
+               else 'epa_per_catch')
+    rec_lg = prod.groupby('season')[rec_col].transform('mean')
     prod['rec_value'] = (prod['receptions']
-                         * (prod['epa_per_catch'].fillna(rec_lg) - rec_lg))
+                         * (prod[rec_col].fillna(rec_lg) - rec_lg))
     prod['value'] = prod['rush_value'] + prod['rec_value']
     prod['z_value'] = prod.groupby('season')['value'].transform(
         lambda s: (s - s.mean()) / s.std())

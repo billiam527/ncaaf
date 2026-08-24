@@ -166,11 +166,23 @@ def opponent_adjust(plays, g, alpha=ALPHA):
     out = []
     for season, sd in p.groupby('season'):
         res = None
-        for flag, cols in (('rushing_play', [('ypc', 'adj_yards_per_carry'),
-                                             ('epr', 'adj_epa_per_rush')]),
-                           ('passing_play', [('ypt', 'adj_yards_per_target'),
-                                             ('ept', 'adj_epa_per_target')])):
+        # The passing side runs twice: once over every target and once over the
+        # CATCHES only. The per-target pair is what this module has always
+        # produced, and it rests on a denominator ESPN stopped recording
+        # reliably in 2021-2024 - a back out of the backfield is a target like
+        # anyone else, and RB catch rate reads 91.6% in 2024 against 75-77% in
+        # the clean seasons. The per-catch pair does not touch that
+        # denominator, and it is what build_value carries forward.
+        for flag, caught_only, cols in (
+                ('rushing_play', False, [('ypc', 'adj_yards_per_carry'),
+                                         ('epr', 'adj_epa_per_rush')]),
+                ('passing_play', False, [('ypt', 'adj_yards_per_target'),
+                                         ('ept', 'adj_epa_per_target')]),
+                ('passing_play', True, [('ypc2', 'adj_yards_per_catch'),
+                                        ('epc', 'adj_epa_per_catch')])):
             s = sd[sd[flag] == 1]
+            if caught_only:
+                s = s[s['caught']]
             if len(s) < MIN_CELLS:
                 continue
             cell = s.groupby(['pid', 'opponent_id'], as_index=False).agg(
@@ -248,32 +260,42 @@ def main():
     d = d[d['pos'].isin(['RB', 'FB'])]
     print(f"  {len(d):,} plays credited to a running back")
 
+    # caught is set on the whole frame, not just on the receiving slice,
+    # because opponent_adjust needs it to fit the per-catch pair. On a rushing
+    # play it is simply False.
+    _pt = d['play_type_text'].astype(str).str.lower().str.strip()
+    d['caught'] = (_pt.isin({'pass reception', 'passing touchdown',
+                             'pass completion', 'receiving touchdown'})
+                   & ~_pt.str.contains('incomplet|interception|sack', na=False))
     rush = d[d['rushing_play'] == 1]
     rec = d[d['passing_play'] == 1]
-    pt = rec['play_type_text'].astype(str).str.lower().str.strip()
-    caught = pt.isin({'pass reception', 'passing touchdown', 'pass completion',
-                      'receiving touchdown'}) & ~pt.str.contains(
-                          'incomplet|interception|sack', na=False)
-    rec = rec.assign(caught=caught)
 
     g = rush.groupby(['pid', 'who', 'team_id', 'season'], as_index=False).agg(
         games=('game_id', 'nunique'), carries=('epa', 'size'),
         rush_yards=('stat_yardage', 'sum'), rush_epa=('epa', 'sum'),
         rush_td=('play_type_text', lambda s: s.astype(str).str.contains(
             'touchdown', case=False, na=False).sum()))
+    # rec_epa runs over every target, incompletions included, so it is the
+    # right numerator for a per-TARGET rate and the wrong one for a per-catch
+    # rate. Divided by receptions it inherits the broken denominator anyway: a
+    # season missing incompletions is missing their negative EPA, which
+    # inflates the result. rec_epa_caught is the per-catch numerator.
+    rec = rec.assign(_epa_caught=np.where(rec['caught'],
+                                          rec['epa'].fillna(0.0), 0.0))
     r2 = rec.groupby(['pid', 'season'], as_index=False).agg(
         targets=('epa', 'size'), receptions=('caught', 'sum'),
-        rec_epa=('epa', 'sum'),
+        rec_epa=('epa', 'sum'), rec_epa_caught=('_epa_caught', 'sum'),
         rec_yards=('stat_yardage', lambda s: s[rec.loc[s.index, 'caught']].sum()))
     g = g.merge(r2, on=['pid', 'season'], how='left')
-    for c in ('targets', 'receptions', 'rec_epa', 'rec_yards'):
+    for c in ('targets', 'receptions', 'rec_epa', 'rec_epa_caught',
+              'rec_yards'):
         g[c] = g[c].fillna(0.0)
 
     g = g[g['carries'] >= args.min_carries].copy()
     g['yards_per_carry'] = g['rush_yards'] / g['carries']
     g['epa_per_rush'] = g['rush_epa'] / g['carries']
     g['yards_per_catch'] = g['rec_yards'] / g['receptions'].replace(0, np.nan)
-    g['epa_per_catch'] = g['rec_epa'] / g['receptions'].replace(0, np.nan)
+    g['epa_per_catch'] = g['rec_epa_caught'] / g['receptions'].replace(0, np.nan)
     g['epa_per_target'] = g['rec_epa'] / g['targets'].replace(0, np.nan)
     g['touches'] = g['carries'] + g['receptions']
     g['total_epa'] = g['rush_epa'] + g['rec_epa']
