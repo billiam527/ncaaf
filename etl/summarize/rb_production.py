@@ -60,8 +60,19 @@ STOP = (r"middle|left|right|end|guard|tackle|for|gain|loss|yards?|yds?|to|at|"
         r"3RD|4TH|penalty")
 _TOK = rf"(?!(?:{RUSH_VERBS}|{STOP})\b)[A-Za-z][\w'\.\-]*"
 _NAME = rf"{_TOK}(?:\s+{_TOK}){{0,2}}"
+# Formation prefixes, which ESPN began writing in 2025 and not before. The
+# trailing [\w\- ]*? here was LAZY, so it matched nothing: "No Huddle-Shotgun
+# #4 M.Fletcher rush" had "No Huddle" stripped and was left as "-Shotgun #4
+# ...", which cannot begin a name. That one string is 32,423 plays and took
+# 2025 from 99% of carries attributed down to 73%.
+#
+# The prefixes actually present, over every season: No Huddle-Shotgun (32,423),
+# Shotgun (17,664), No Huddle (807), all of them 2025 only - plus "Kneel down
+# by" (366), which KNEEL catches before this runs. So the compound is spelled
+# out rather than approximated by a wildcard that can silently match nothing.
+_FORM = r"(?:No\s+Huddle|Shotgun|Hurry\s+Up|Under\s+Center)"
 LEAD = re.compile(
-    r"^(?:\(\d+:\d+\)\s*)?(?:(?:No\s+Huddle|Shotgun|Hurry\s+Up)[\w\- ]*?)?\s*"
+    rf"^(?:\(\d+:\d+\)\s*)?(?:{_FORM}(?:\s*-\s*{_FORM})*\s*)?"
     r"(?:#\d+\s*)?", re.I)
 P_RUSH = re.compile(rf"^({_NAME})\s+(?:{RUSH_VERBS})\b", re.I)
 P_COMMA = re.compile(
@@ -279,19 +290,52 @@ def main():
     # An independent check on the attribution. Team rushing yardage from the
     # play flags needs no name parsed, so a gap means backs are being lost.
     allrush = read_pbp(PBP, usecols=['game_id', 'rushing_play',
-                                        'stat_yardage'], low_memory=False)
+                                        'stat_yardage', 'play_text'],
+                       low_memory=False)
     allrush['game_id'] = pd.to_numeric(allrush['game_id'], errors='coerce')
     allrush['season'] = allrush['game_id'].map(seasons_by_game)
     allrush = allrush[(pd.to_numeric(allrush['rushing_play'],
                                      errors='coerce') == 1)
                       & allrush['season'].notna()]
-    tot = pd.to_numeric(allrush['stat_yardage'], errors='coerce').sum()
+    # PER SEASON, and on the share of rush PLAYS that resolve to any runner
+    # rather than the share of yardage backs take.
+    #
+    # The previous version pooled every season and compared RB yardage to all
+    # rushing yardage, printing "roughly half" with no threshold. It could not
+    # fail: quarterbacks take a variable share of the rest, so there is no
+    # number it could have been checked against, and one bad season is diluted
+    # eleven ways. It read 48.5% while 2025 was losing a quarter of its carries.
+    #
+    # What cannot be argued with is the share of rushing plays that name
+    # anybody. That sat at 99%+ from 2014 to 2020 and is the level to hold.
+    allrush['named'] = allrush['play_text'].map(
+        lambda t: rusher(t) is not None if isinstance(t, str) else False)
+    per = allrush.groupby(allrush['season'].astype(int))['named'].agg(
+        ['sum', 'size'])
+    per['share'] = per['sum'] / per['size']
+    base = per['share'].max()
+    print("\n  share of rushing plays resolving to a runner, by season")
+    print("  season    plays    named     vs best")
+    print("  " + "-" * 44)
+    bad = []
+    for s, r in per.iterrows():
+        gap = r['share'] - base
+        flag = '  <-- LOSING CARRIES' if gap < -0.03 else ''
+        print(f"  {s}  {int(r['size']):>8,}   {r['share']:>6.1%}   "
+              f"{gap:>+6.1%}{flag}")
+        if gap < -0.03:
+            bad.append(s)
+    if bad:
+        print(f"\n  WARNING: {bad} attribute more than 3 points fewer carries "
+              f"than the best season ({base:.1%}).")
+        print("  Every per-carry and share figure in those seasons is computed "
+              "on a\n  denominator that is missing runners. Check the play "
+              "text for a format\n  the parser has not seen.")
     got = float(rush['stat_yardage'].sum())
+    tot = pd.to_numeric(allrush['stat_yardage'], errors='coerce').sum()
     print(f"\n  rushing yards on RB-credited plays {got:,.0f} of "
-          f"{tot:,.0f} league-wide ({got/tot:.1%})")
-    print("  (backs take roughly half of all rushing yardage; quarterbacks, "
-          "receivers\n   and sacks make up the rest, so this is a floor "
-          "check rather than a target)")
+          f"{tot:,.0f} league-wide ({got/tot:.1%}) - a floor, since "
+          f"quarterbacks\n  take much of the rest")
 
     for c in ('yards_per_carry', 'epa_per_rush', 'carry_share', 'touches',
               'adj_yards_per_carry', 'adj_epa_per_rush'):
