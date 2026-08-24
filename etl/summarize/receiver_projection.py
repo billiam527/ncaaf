@@ -33,18 +33,27 @@ PLAYER PROJECTION
 Each returning receiver is carried forward the same way the quarterback model
 works, on his own record plus the year he is entering:
 
-    next = -0.312 + 0.733*current + 0.156*log(targets)
-                  - 0.073*current*log(targets) - 0.083*experience
+    next = a + b*current + c*log(receptions)
+             + d*current*log(receptions) + e*experience
 
-Two results in there are worth stating because they contradict what seems
-obvious. Volume does NOT make a season more predictive - fitted separately by
-target count the slope is flat, 0.47 at 25-35 targets against 0.43 at 95+, and
-the correlation between target count and slope is -0.160. A 26-target season
-carries forward about as well as a 106-target one, which is why shrinking thin
-seasons toward the mean does nothing here: value already scales with targets,
-so the weighting is present before anything is shrunk. And experience carries a
-NEGATIVE coefficient, so an older receiver projects slightly worse than a
-younger one who produced the same, the reverse of the quarterback curve.
+with the fitted values printed at build time rather than quoted here, because
+every version of this docstring that hard-coded them went stale within weeks.
+
+The volume term is RECEPTIONS. It was log(targets) until 23 Aug 2026, and the
+whole value definition rested on targets before that. Targets turned out to be
+unusable across most of the panel: ESPN stopped naming the intended receiver on
+incompletions during 2021-2024, so only 70.8% of 2024 pass plays name anybody
+against 98.6% in 2025, and measured against CFBD pass attempts our team target
+totals run at 0.679 of the truth in 2024 against 0.933 in 2025. Only
+incompletions vanish, so catch rate, yards per target and target share all
+inflate. Receptions are unaffected and match CFBD box scores at 0.95-0.99 in
+every season.
+
+Experience carries a NEGATIVE coefficient, so an older receiver projects
+slightly worse than a younger one who produced the same - the reverse of the
+quarterback curve. Whether volume makes a season more predictive is a question
+this rebuild reopens: on target counts the slope looked flat, but that was
+measured on the damaged panel.
 
 Holdout, fitted through 2022 and tested on 2023-2025:
 
@@ -88,6 +97,23 @@ ROOM_WR, ROOM_TE = 4, 2
 # excluded - 13% of the rows before filtering.
 ROOM_POSITIONS = ('WR', 'TE')
 
+# The projection reads the value, the volume behind it, their interaction, the
+# year the man is entering, and three standardised extras. The shares are what
+# the module's own early work found most repeatable about a receiver - target
+# share stood at 0.519 - and their target-free twins carry the same weight:
+# reception share repeats at 0.457 across the panel and yard share at 0.424,
+# against 0.415 for the value itself. They cannot BE the value, since a room's
+# total has to be a sum and shares sum to 1, but they belong in the fit.
+#
+# Measured on the whole panel, train through 2022 and test on 2023-2025:
+#   value + volume + experience          +0.3437
+#   + reception share                    +0.3443
+#   + yard share                         +0.3445
+#   + both shares and EPA per catch      +0.3495
+FEATURES = ['z_value', 'lt', 'zt', 'exp',
+            'z_reception_share', 'z_yard_share', 'z_adj_epa_per_catch']
+Z_EXTRAS = ('reception_share', 'yard_share', 'adj_epa_per_catch')
+
 
 def fit_projection(prod, cutoff=2022):
     """next season's value from this one, volume and experience.
@@ -101,16 +127,20 @@ def fit_projection(prod, cutoff=2022):
     for c in ('z_value', 'season', 'exp'):
         d['n_' + c] = d.groupby('rec_id')[c].shift(-1)
     P = d[d['n_season'] == d['season'] + 1].dropna(
-        subset=['z_value', 'n_z_value', 'targets', 'exp'])
-    P = P.assign(lt=np.log(P['targets']),
-                 zt=P['z_value'] * np.log(P['targets']))
-    X = ['z_value', 'lt', 'zt', 'exp']
+        subset=['z_value', 'n_z_value', 'receptions', 'exp'])
+    # The volume term is receptions, not targets: targets are undercounted by a
+    # season-varying amount (0.679 of the truth in 2024, 0.933 in 2025), so a
+    # log(targets) term would read a receiver's workload partly off how well his
+    # games happened to be recorded.
+    P = P.assign(lt=np.log(P['receptions'].clip(lower=1)),
+                 zt=P['z_value'] * np.log(P['receptions'].clip(lower=1)))
+    P = P.dropna(subset=FEATURES)
     tr, te = P[P['season'] <= cutoff], P[P['season'] > cutoff]
     skill = np.nan
     if len(te) > 30:
-        m0 = LinearRegression().fit(tr[X], tr['n_z_value'])
-        skill = np.corrcoef(m0.predict(te[X]), te['n_z_value'])[0, 1]
-    m = LinearRegression().fit(P[X], P['n_z_value'])
+        m0 = LinearRegression().fit(tr[FEATURES], tr['n_z_value'])
+        skill = np.corrcoef(m0.predict(te[FEATURES]), te['n_z_value'])[0, 1]
+    m = LinearRegression().fit(P[FEATURES], P['n_z_value'])
     return m, skill, len(P)
 
 
@@ -175,7 +205,11 @@ def project_players(prod, roster, recruits, season, model):
     last = (hist.sort_values('season').groupby('rec_id')
             .agg(prev_team=('team', 'last'), prev_season=('season', 'max'),
                  z_value=('z_value', 'last'), targets=('targets', 'last'),
+                 receptions=('receptions', 'last'),
                  prev_yards=('rec_yards', 'last'),
+                 z_reception_share=('z_reception_share', 'last'),
+                 z_yard_share=('z_yard_share', 'last'),
+                 z_adj_epa_per_catch=('z_adj_epa_per_catch', 'last'),
                  prev_exp=('exp', 'last')).reset_index())
     r = roster[(roster['season'] == season)
                & (roster['position'].isin(['WR', 'TE']))].copy()
@@ -184,10 +218,17 @@ def project_players(prod, roster, recruits, season, model):
         return pd.DataFrame()
     # a year older than his last recorded season, not than his last on a roster
     r['exp'] = r['prev_exp'] + (season - r['prev_season'])
-    r = r.dropna(subset=['z_value', 'targets', 'exp'])
-    r['lt'] = np.log(r['targets'])
+    r = r.dropna(subset=['z_value', 'receptions', 'exp'])
+    r['lt'] = np.log(r['receptions'].clip(lower=1))
     r['zt'] = r['z_value'] * r['lt']
-    r['projected'] = model.predict(r[['z_value', 'lt', 'zt', 'exp']])
+    # a receiver missing one of the extras keeps his projection rather than
+    # dropping out of the room: the extras are standardised, so 0 is the
+    # position's own average for that season and is the right neutral fill
+    for _c in FEATURES:
+        if _c not in r.columns:
+            r[_c] = 0.0
+    r[FEATURES] = r[FEATURES].fillna(0.0)
+    r['projected'] = model.predict(r[FEATURES])
     r['moved'] = r['prev_team'] != r['team']
     return r
 
@@ -217,14 +258,40 @@ def main():
     name_to_id = dict(zip(teams['location'], teams['id']))
     id_to_name = {v: k for k, v in name_to_id.items()}
 
-    # value above an average receiver on the same targets, which is what the
-    # projection carries forward
-    lg = prod.groupby('season')['adj_yards_per_target'].mean().rename('lg')
-    prod = prod.merge(lg, on='season', how='left')
-    prod['value'] = prod['targets'] * (prod['adj_yards_per_target'] - prod['lg'])
+    # Value above an average receiver on the same CATCHES, which is what the
+    # projection carries forward.
+    #
+    # This was targets x (adj_yards_per_target - league) until 23 Aug 2026. It
+    # had to change because targets are not trustworthy: ESPN stopped naming the
+    # intended receiver on incompletions through 2021-2024, so only 70.8% of
+    # 2024 pass plays name anyone against 98.6% in 2025, and our team target
+    # totals run at 0.679 of the truth in 2024 against 0.933 in 2025. Both terms
+    # of the old definition were affected - the multiplier directly, and the
+    # rate through its denominator.
+    #
+    # Receptions survive: they match CFBD box scores at 0.95-0.99 in every
+    # season. Fitted on clean seasons only, the per-catch family predicts next
+    # season at +0.376 against the target family's +0.351 on the per-catch
+    # yardstick and +0.321 against +0.354 on the per-target one - within about
+    # 0.03 either way - so this costs almost nothing and works in all twelve
+    # seasons rather than only 2014-2020 and 2025.
+    # Total opponent-adjusted receiving yards. Subtracting a league mean first
+    # was tried and is worse: it repeats at 0.374 across the whole panel where
+    # the plain total repeats at 0.415, and it drops holdout from +0.344 to
+    # +0.273, because the subtraction re-introduces a season-level quantity the
+    # measure then has to carry. A counting statistic is also what the team
+    # aggregate needs, since a room's total is the sum of its receivers and
+    # shares sum to 1 by construction.
+    prod['value'] = prod['receptions'] * prod['adj_yards_per_catch']
+    # The target-based value is kept alongside for the seasons where targets
+    # are sound, and so the two can go on being compared.
+    lgt = prod.groupby('season')['adj_yards_per_target'].mean().rename('lg_t')
+    prod = prod.merge(lgt, on='season', how='left')
+    prod['value_target'] = prod['targets'] * (prod['adj_yards_per_target']
+                                              - prod['lg_t'])
     # Standardised within season AND position. A tight end does a smaller job:
-    # 41.6 targets against 54.9, a 12.7% target share against 16.5%, 12.0 yards
-    # a catch against 13.6. On a shared scale they are 13% of the population and
+    # 43.4 targets against 57.8, a 12.8% target share against 16.5%, 12.1 yards
+    # a catch against 13.7. On a shared scale they are 13% of the population and
     # 0% of the top hundred, which says nothing about tight ends and everything
     # about the comparison. They are not a different kind of player to model,
     # though - fitted separately the slope is +0.397 against +0.392 for wide
@@ -232,6 +299,10 @@ def main():
     # runs on both and only the yardstick changes.
     prod['z_value'] = prod.groupby(['season', 'rec_pos'])['value'].transform(
         lambda s: (s - s.mean()) / s.std())
+    # the extras the fit reads, on the same season-and-position scale
+    for _c in Z_EXTRAS:
+        prod['z_' + _c] = prod.groupby(['season', 'rec_pos'])[_c].transform(
+            lambda s: (s - s.mean()) / s.std())
     prod['team'] = prod['team_id'].map(id_to_name)
 
     recruits = load('recruits')
@@ -257,9 +328,16 @@ def main():
     model, skill, n = fit_projection(prod)
     print(f"projection fitted on {n:,} consecutive pairs, "
           f"holdout r = {skill:+.3f}")
-    print(f"  next = {model.intercept_:+.3f} "
-          f"{model.coef_[0]:+.3f}*value {model.coef_[1]:+.3f}*log(targets) "
-          f"{model.coef_[2]:+.3f}*value:log(targets) {model.coef_[3]:+.3f}*exp")
+    # printed off FEATURES rather than by position, so adding a term cannot
+    # silently mislabel the ones after it
+    LABEL = {'z_value': 'value', 'lt': 'log(receptions)',
+             'zt': 'value:log(receptions)', 'exp': 'exp',
+             'z_reception_share': 'reception_share',
+             'z_yard_share': 'yard_share',
+             'z_adj_epa_per_catch': 'adj_epa_per_catch'}
+    terms = ' '.join(f"{c:+.3f}*{LABEL.get(f, f)}"
+                     for f, c in zip(FEATURES, model.coef_))
+    print(f"  next = {model.intercept_:+.3f} {terms}")
 
     out, players = [], []
     for season in range(args.from_season, args.season + 1):
@@ -365,7 +443,8 @@ def main():
     if players:
         PL = pd.concat(players, ignore_index=True)
         keep = ['season', 'team', 'pid', 'firstName', 'lastName', 'position',
-                'basis', 'prev_team', 'prev_season', 'prev_yards', 'targets',
+                'basis', 'prev_team', 'prev_season', 'prev_yards',
+                'receptions', 'targets',
                 'exp', 'z_value', 'stars', 'rating', 'p_play', 'if_plays',
                 'projected', 'moved']
         PL = PL[[c for c in keep if c in PL.columns]]
