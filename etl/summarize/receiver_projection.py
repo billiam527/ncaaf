@@ -580,10 +580,15 @@ def main():
 
     if players:
         PL = pd.concat(players, ignore_index=True)
+        # every input the projection reads is written out alongside its
+        # output, so a page or an audit can show what produced a number
+        # without re-deriving it from the production file
         keep = ['season', 'team', 'pid', 'firstName', 'lastName', 'position',
                 'basis', 'prev_team', 'prev_season', 'prev_yards',
                 'receptions', 'targets',
-                'exp', 'z_value', 'stars', 'rating', 'p_play', 'if_plays',
+                'exp', 'z_value', 'z_reception_share', 'z_yard_share',
+                'z_adj_epa_per_catch',
+                'stars', 'rating', 'p_play', 'if_plays',
                 'projected', 'moved']
         PL = PL[[c for c in keep if c in PL.columns]]
         PL = PL.sort_values(['season', 'projected'], ascending=[True, False])
