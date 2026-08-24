@@ -365,10 +365,17 @@ def project_players(prod, roster, recruits, season, model):
                  car_n=('car_n', 'last'),
                  prev_exp=('exp', 'last')).reset_index())
     r = roster[(roster['season'] == season)
-               & (roster['position'].isin(['WR', 'TE']))].copy()
+               & (roster['position'].isin(ROOM_POSITIONS))].copy()
     r = r.merge(last, left_on='pid', right_on='rec_id', how='inner')
     if r.empty:
         return pd.DataFrame()
+    # The recruiting grade, which project_freshmen merges because it needs it
+    # and this never did - so every receiver with a record carried a null one
+    # and the column read empty for exactly the men most likely to be looked
+    # up. It carries no weight in the projection; it is here to be shown.
+    if 'rid' in r.columns:
+        r = r.merge(recruits[['id', 'stars', 'rating']].rename(
+            columns={'id': 'rid'}), on='rid', how='left')
     # a year older than his last recorded season, not than his last on a roster
     r['exp'] = r['prev_exp'] + (season - r['prev_season'])
     r = r.dropna(subset=['z_value', 'receptions', 'exp'])
