@@ -191,6 +191,58 @@ LAST_FINISHED_CLASS = 2021
 MIN_BAND = 30
 
 
+# The counting line, projected alongside the rating. The rating is a
+# standardised number nobody can read off a page; catches, yards per catch and
+# EPA per catch are what a reader checks a room against.
+#
+# Each is fitted on the same features as the rating plus its own current value,
+# which is the strongest predictor of itself. Holdout on 2023-2025:
+#
+#   receptions          +0.513   mean error 12.1 catches
+#   adj yards per catch +0.625   mean error 2.11
+#   adj EPA per catch   see build output
+#
+# Only men with a record get one. A freshman has nothing to carry forward and
+# an invented line would read as knowledge.
+LINE = {'receptions': 'proj_receptions',
+        'adj_yards_per_catch': 'proj_ypc',
+        'adj_epa_per_catch': 'proj_epc'}
+
+
+def fit_line(prod, cutoff=2022):
+    """One model per counting statistic, and its holdout skill."""
+    from sklearn.linear_model import LinearRegression
+    d = prod.sort_values(['rec_id', 'season']).copy()
+    # lt and zt are built inside fit_projection, so they have to be rebuilt
+    # here rather than assumed present on prod
+    d['lt'] = np.log(d['receptions'].clip(lower=1))
+    d['zt'] = d['z_value'] * d['lt']
+    for c in LINE:
+        d['n_' + c] = d.groupby('rec_id')[c].shift(-1)
+    d['n_season'] = d.groupby('rec_id')['season'].shift(-1)
+    P = d[d['n_season'] == d['season'] + 1]
+    out = {}
+    for src, name in LINE.items():
+        X = FEATURES + [src]
+        q = P.dropna(subset=X + ['n_' + src])
+        if len(q) < 200:
+            continue
+        tr, te = q[q['season'] <= cutoff], q[q['season'] > cutoff]
+        skill, err = np.nan, np.nan
+        if len(te) > 30:
+            m0 = LinearRegression().fit(tr[X], tr['n_' + src])
+            pr = m0.predict(te[X])
+            skill = np.corrcoef(pr, te['n_' + src])[0, 1]
+            err = float(np.abs(pr - te['n_' + src]).mean())
+        out[name] = (LinearRegression().fit(q[X], q['n_' + src]), X,
+                     skill, err, src)
+    print("projected line, holdout on the seasons after "
+          f"{cutoff}:")
+    for name, (_, _, sk, er, src) in out.items():
+        print(f"  {src:<22}r = {sk:+.3f}   mean error {er:>6.2f}")
+    return out
+
+
 def fit_freshman(prod, roster, recruits, rating_mu, rating_sd):
     """Derive the no-record model from finished careers.
 
@@ -362,7 +414,7 @@ def trim_to_room(df, value_col, pos_col='position'):
     return d[d['_rk'] <= limit].drop(columns=['_rk', '_tier'])
 
 
-def project_players(prod, roster, recruits, season, model):
+def project_players(prod, roster, recruits, season, model, line=None):
     """Every returning receiver's expected value for `season`."""
     hist = prod[prod['season'] < season]
     if hist.empty:
@@ -381,6 +433,9 @@ def project_players(prod, roster, recruits, season, model):
                  prior_max=('prior_max', 'last'),
                  has_prior=('has_prior', 'last'),
                  car_n=('car_n', 'last'),
+                 # the raw rates the counting line is projected from
+                 adj_yards_per_catch=('adj_yards_per_catch', 'last'),
+                 adj_epa_per_catch=('adj_epa_per_catch', 'last'),
                  prev_exp=('exp', 'last')).reset_index())
     r = roster[(roster['season'] == season)
                & (roster['position'].isin(ROOM_POSITIONS))].copy()
@@ -420,6 +475,15 @@ def project_players(prod, roster, recruits, season, model):
             r[_c] = 0.0
     r[FEATURES] = r[FEATURES].fillna(0.0)
     r['projected'] = model.predict(r[FEATURES])
+    # the readable line, for men who have one. A projected reception count is
+    # clipped at zero because a linear fit will occasionally go under.
+    for name, (m, cols, _sk, _er, src) in (line or {}).items():
+        ok = r[src].notna()
+        r[name] = np.nan
+        if ok.any():
+            r.loc[ok, name] = m.predict(r.loc[ok, cols])
+    if 'proj_receptions' in r.columns:
+        r['proj_receptions'] = r['proj_receptions'].clip(lower=0)
     r['moved'] = r['prev_team'] != r['team']
     return r
 
@@ -531,6 +595,7 @@ def main():
     FRESH = (_pm, _vm)
 
     model, skill, n = fit_projection(prod)
+    LINE_MODELS = fit_line(add_career(prod.sort_values(['rec_id', 'season'])))
     print(f"projection fitted on {n:,} consecutive pairs, "
           f"holdout r = {skill:+.3f}")
     # printed off FEATURES rather than by position, so adding a term cannot
@@ -598,7 +663,8 @@ def main():
         # to a depth chart. Both sources compete for the same places: a
         # five-star freshman can displace a marginal returner, which is what
         # actually happens.
-        pl = project_players(prod, roster, recruits, season, model)
+        pl = project_players(prod, roster, recruits, season, model,
+                             line=LINE_MODELS)
         pl = pl[pl['team'].isin(fbs)] if len(pl) else pl
         if len(pl):
             pl = pl.assign(basis='record')
@@ -673,6 +739,7 @@ def main():
                 'receptions', 'targets',
                 'exp', 'z_value', 'z_reception_share', 'z_yard_share',
                 'z_adj_epa_per_catch', 'prior_max', 'has_prior', 'car_n',
+                'proj_receptions', 'proj_ypc', 'proj_epc',
                 'stars', 'rating', 'p_play', 'if_plays',
                 'projected', 'moved']
         PL = PL[[c for c in keep if c in PL.columns]]
