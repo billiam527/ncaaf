@@ -144,40 +144,145 @@ def fit_projection(prod, cutoff=2022):
     return m, skill, len(P)
 
 
-# A recruit's chance of ever reaching a qualifying season, by band. Measured on
-# the 2014-2021 classes, whose careers are finished. This is the larger half of
-# the uncertainty about a freshman: whether he plays at all, not how well.
+# Fallbacks only. These were hardcoded constants for a long time and went stale
+# without anything noticing, twice over: they describe the chance of reaching a
+# QUALIFYING season, and the gate moved from 25 targets to 16 receptions when
+# targets stopped being trustworthy, so the population they were measured on no
+# longer exists. FRESH_A/FRESH_B predicted a target-based value that has since
+# been replaced by a catch-based one.
+#
+# fit_freshman() now derives all three from the data on every build and prints
+# them. These are used only if a band has too few finished careers to fit.
 PLAY_RATE = {5: 0.84, 4: 0.47, 3: 0.18, 2: 0.06}
-# A tight end reaches a qualifying season less often than a wide receiver
-# holding the recruiting grade fixed - 39% against 50% at four stars, 11%
-# against 20% at three - so the rate is scaled rather than shared. Weighted
-# across bands on the finished 2014-2021 classes the ratio is 0.64.
 TE_PLAY_FACTOR = 0.64
-# first qualifying season from the recruiting grade alone, holdout r = +0.174
 FRESH_A, FRESH_B = -0.042, 0.187
+# Classes signed by LAST_FINISHED_CLASS have had four seasons to appear and are
+# treated as finished; later ones are still in progress and would read as
+# failures. The lower bound matters just as much and is easier to miss: the
+# production panel starts in 2014, so a man signed in 2012 who qualified in
+# 2013 is invisible to it and would be counted as never having played. Without
+# the bound the five-star band read 44 men where 2014-2021 holds 32.
+FIRST_FINISHED_CLASS = 2014
+LAST_FINISHED_CLASS = 2021
+MIN_BAND = 30
 
 
-def project_freshmen(roster, recruits, season, rating_mu, rating_sd):
+def fit_freshman(prod, roster, recruits, rating_mu, rating_sd):
+    """Derive the freshman model from finished careers.
+
+    Two quantities, and using either alone is wrong. Most of a signing class
+    never reaches a qualifying season at all, which is the larger half of the
+    uncertainty; and among those who do, the grade says only a little about how
+    good the first season is.
+
+    Returns (play_rate, te_factor, a, b, skill) where play_rate is keyed by
+    star band and describes wide receivers, te_factor scales it for tight ends,
+    and a + b*z_rating is the expected first-season value given he plays.
+    """
+    from sklearn.linear_model import LinearRegression
+    rc = recruits.dropna(subset=['class_year', 'stars']).copy()
+    rc = rc[rc['class_year'].between(FIRST_FINISHED_CLASS,
+                                     LAST_FINISHED_CLASS)]
+    if rc.empty:
+        return PLAY_RATE, TE_PLAY_FACTOR, FRESH_A, FRESH_B, np.nan
+
+    # The denominator is every recruit signed at the position, not every one who
+    # later turned up on a roster. A three-star who never makes a roster is
+    # exactly the case the rate exists to price, and dropping him would make
+    # p_play read as "given he stuck around", which is not what it multiplies.
+    first = (prod.sort_values('season').groupby('rec_id')
+             .agg(first_z=('z_value', 'first')).reset_index())
+    rc = rc.merge(first, left_on='pid', right_on='rec_id', how='left')
+    rc['played'] = rc['first_z'].notna()
+
+    # A logistic on the grade itself rather than a rate per star band. Bands
+    # are the wrong tool: once the classes are bounded to 2014-2021 only 24
+    # five-star receivers remain, which is too few to rate on its own and was
+    # silently falling back to a stale constant while every other band was
+    # fitted. The logistic borrows strength from the four-stars and returns a
+    # probability for any grade, with the tight-end discount as a coefficient
+    # rather than a separately measured ratio.
+    from sklearn.linear_model import LogisticRegression
+    rc = rc.assign(rz=(rc['rating'] - rating_mu) / rating_sd,
+                   is_te=(rc['position'] == 'TE').astype(float))
+    fit = rc.dropna(subset=['rz', 'played'])
+    play_model = None
+    if len(fit) > 200 and fit['played'].nunique() > 1:
+        # fitted on a bare array so predict_proba on one later does not warn
+        # about missing feature names
+        play_model = LogisticRegression(max_iter=1000).fit(
+            fit[['rz', 'is_te']].to_numpy(float),
+            fit['played'].astype(int).to_numpy())
+
+    # conditional on playing, the grade against the first qualifying season
+    q = rc[rc['played']].dropna(subset=['rating', 'first_z'])
+    a, b, skill = FRESH_A, FRESH_B, np.nan
+    if len(q) > 100:
+        q = q.assign(rz=(q['rating'] - rating_mu) / rating_sd)
+        cut = q['class_year'].quantile(0.7)
+        tr, te_ = q[q['class_year'] <= cut], q[q['class_year'] > cut]
+        if len(te_) > 30:
+            m0 = LinearRegression().fit(tr[['rz']], tr['first_z'])
+            skill = np.corrcoef(m0.predict(te_[['rz']]), te_['first_z'])[0, 1]
+        m = LinearRegression().fit(q[['rz']], q['first_z'])
+        a, b = float(m.intercept_), float(m.coef_[0])
+
+    print(f"freshman model from {len(rc):,} finished careers "
+          f"({FIRST_FINISHED_CLASS}-{LAST_FINISHED_CLASS}), "
+          f"{rc['pid'].notna().mean():.0%} ever on a roster")
+    if play_model is not None:
+        # printed at each band's own mean grade, so the fitted curve can be
+        # read against the raw rate it is smoothing
+        parts = []
+        for st in (5, 4, 3, 2):
+            g = rc[(rc['stars'] == st) & (rc['position'] == 'WR')]
+            if not len(g):
+                continue
+            pz = float(g['rz'].mean())
+            p = float(play_model.predict_proba([[pz, 0.0]])[0, 1])
+            parts.append(f"{st}*={p:.0%} (raw {g['played'].mean():.0%}, "
+                         f"n={len(g)})")
+        print("  reaches a qualifying season, WR: " + '  '.join(parts))
+        te_c = play_model.coef_[0][1]
+        print(f"  tight end coefficient {te_c:+.2f} in log-odds", end='')
+    print(f"   if he plays: {a:+.3f} {b:+.3f}*grade  "
+          f"holdout r = {skill:+.3f}")
+    return play_model, a, b, skill
+
+
+def project_freshmen(roster, recruits, season, rating_mu, rating_sd,
+                     fresh=None):
     """Expected value from receivers with no record, mostly incoming recruits.
 
-    Two things have to be multiplied, and using either alone is wrong. A
-    five-star receiver reaches a qualifying season 84% of the time and a
-    two-star 6%, so most of a class contributes nothing; and conditional on
-    playing, the grade predicts his first season only weakly (+0.174). The
-    product is a small number for everyone, which is the honest answer - a
-    signing class is worth much less to next season than a returning starter.
+    Two things have to be multiplied, and using either alone is wrong. Most of
+    a signing class never reaches a qualifying season, so a grade on its own
+    badly overstates what a class is worth; and among those who do play, the
+    grade says only a little about how good the first season is. The product is
+    a small number for everyone, which is the honest answer - a signing class is
+    worth much less to next season than one returning starter.
+
+    `fresh` carries the rates derived from finished careers by fit_freshman.
+    Without it the module-level fallbacks are used, which is only correct if
+    neither the qualification gate nor the value definition has moved.
     """
+    play_model, a, b = (fresh if fresh is not None
+                        else (None, FRESH_A, FRESH_B))
     r = roster[(roster['season'] == season)
-               & (roster['position'].isin(['WR', 'TE']))].copy()
+               & (roster['position'].isin(ROOM_POSITIONS))].copy()
     r = r.merge(recruits[['id', 'rating', 'stars']].rename(
         columns={'id': 'rid'}), on='rid', how='left')
     r = r.dropna(subset=['rating', 'stars'])
     if r.empty:
         return pd.DataFrame()
-    r['p_play'] = r['stars'].astype(int).map(PLAY_RATE).fillna(0.06)
-    r.loc[r['position'] == 'TE', 'p_play'] *= TE_PLAY_FACTOR
     rz = (r['rating'] - rating_mu) / rating_sd
-    r['if_plays'] = FRESH_A + FRESH_B * rz
+    if play_model is not None:
+        X = np.column_stack([rz.to_numpy(float),
+                             (r['position'] == 'TE').to_numpy(float)])
+        r['p_play'] = play_model.predict_proba(X)[:, 1]
+    else:
+        r['p_play'] = r['stars'].astype(int).map(PLAY_RATE).fillna(0.06)
+        r.loc[r['position'] == 'TE', 'p_play'] *= TE_PLAY_FACTOR
+    r['if_plays'] = a + b * rz
     r['projected'] = r['p_play'] * r['if_plays']
     return r
 
@@ -316,6 +421,16 @@ def main():
         on='rid', how='left')
     prod['exp'] = prod['season'] - prod['class_year']
 
+    # every receiver recruit, linked to a roster id where one exists so the
+    # unlinked ones stay in the denominator as men who never played
+    _rec = recruits.copy()
+    _rec['rid'] = _rec['id'].astype(str)
+    _rec['class_year'] = pd.to_numeric(_rec['year'], errors='coerce')
+    for _c in ('rating', 'stars'):
+        _rec[_c] = pd.to_numeric(_rec[_c], errors='coerce')
+    _rec = _rec[_rec['position'].isin(ROOM_POSITIONS)]
+    finished = _rec.merge(link, on='rid', how='left')
+
     rating_mu = float(prod['rating'].mean()) if 'rating' in prod.columns else None
     if rating_mu is None:
         rr = recruits[['id', 'rating']].copy()
@@ -324,6 +439,10 @@ def main():
         rating_sd = float(rr['rating'].std())
     else:
         rating_sd = float(prod['rating'].std())
+
+    _pm, _fa, _fb, _fskill = fit_freshman(prod, roster, finished,
+                                          rating_mu, rating_sd)
+    FRESH = (_pm, _fa, _fb)
 
     model, skill, n = fit_projection(prod)
     print(f"projection fitted on {n:,} consecutive pairs, "
@@ -381,7 +500,8 @@ def main():
         if len(pl):
             pl = pl.assign(basis='record')
         proven = set(pl['pid']) if len(pl) else set()
-        fr = project_freshmen(roster, recruits, season, rating_mu, rating_sd)
+        fr = project_freshmen(roster, recruits, season, rating_mu, rating_sd,
+                              fresh=FRESH)
         if len(fr):
             fr = fr[fr['team'].isin(fbs) & ~fr['pid'].isin(proven)]
             if len(fr):
