@@ -97,22 +97,45 @@ ROOM_WR, ROOM_TE = 4, 2
 # excluded - 13% of the rows before filtering.
 ROOM_POSITIONS = ('WR', 'TE')
 
-# The projection reads the value, the volume behind it, their interaction, the
-# year the man is entering, and three standardised extras. The shares are what
-# the module's own early work found most repeatable about a receiver - target
-# share stood at 0.519 - and their target-free twins carry the same weight:
-# reception share repeats at 0.457 across the panel and yard share at 0.424,
-# against 0.415 for the value itself. They cannot BE the value, since a room's
-# total has to be a sum and shares sum to 1, but they belong in the fit.
+# Last season, the volume behind it, their interaction, the year the man is
+# entering, his EPA per catch, and what he had done BEFORE last season.
 #
-# Measured on the whole panel, train through 2022 and test on 2023-2025:
-#   value + volume + experience          +0.3437
-#   + reception share                    +0.3443
-#   + yard share                         +0.3445
-#   + both shares and EPA per catch      +0.3495
-FEATURES = ['z_value', 'lt', 'zt', 'exp',
-            'z_reception_share', 'z_yard_share', 'z_adj_epa_per_catch']
+# The two share terms that used to sit here are gone. They correlate +0.902
+# with each other and were worth +0.0017 between them; drop either and the
+# survivor flips sign, which is what a pair of collinear terms fitting noise
+# does. They remain the right measure of a receiver on their own - reception
+# share is the heaviest term in the season rating - but conditional on the
+# value and the volume they add nothing.
+#
+# The career replaces them and is worth ten times as much. Note it is the best
+# of the seasons BEFORE the last one, not the career best: career best includes
+# the last season and equals it for 85% of pairs, so putting both in drove
+# z_value to -0.135 and made it swing -0.04/-0.03/-0.21 across training windows.
+# Split that way both terms stay stable and interpretable.
+#
+# Two splits, since a gain has to survive both:
+#                                     test 23-25   test 21-25
+#   last season only                    +0.3478      +0.3881
+#   + both shares (previous)            +0.3495      +0.3889
+#   + career best and count             +0.3625      +0.3946   (unstable)
+#   + best-so-far and count (used)      +0.3628      +0.3966
+FEATURES = ['z_value', 'lt', 'zt', 'exp', 'z_adj_epa_per_catch',
+            'prior_max', 'has_prior', 'car_n']
 Z_EXTRAS = ('reception_share', 'yard_share', 'adj_epa_per_catch')
+
+
+def add_career(d, group='rec_id', col='z_value'):
+    """Best season before this one, whether there is one, and how many.
+
+    A man in his first qualifying season has no prior. That is not a bad prior,
+    so it is flagged rather than filled with a number that would read as one.
+    """
+    g = d.groupby(group)[col]
+    d['prior_max'] = g.transform(lambda s: s.shift().expanding().max())
+    d['has_prior'] = d['prior_max'].notna().astype(float)
+    d['prior_max'] = d['prior_max'].fillna(0.0)
+    d['car_n'] = d.groupby(group).cumcount() + 1
+    return d
 
 
 def fit_projection(prod, cutoff=2022):
@@ -124,6 +147,7 @@ def fit_projection(prod, cutoff=2022):
     """
     from sklearn.linear_model import LinearRegression
     d = prod.sort_values(['rec_id', 'season']).copy()
+    d = add_career(d)
     for c in ('z_value', 'season', 'exp'):
         d['n_' + c] = d.groupby('rec_id')[c].shift(-1)
     P = d[d['n_season'] == d['season'] + 1].dropna(
@@ -325,6 +349,9 @@ def project_players(prod, roster, recruits, season, model):
     hist = prod[prod['season'] < season]
     if hist.empty:
         return pd.DataFrame()
+    # the career behind his last recorded season, on the same definition the
+    # fit used: best of everything strictly before it, and how many he has
+    hist = add_career(hist.sort_values(['rec_id', 'season']).copy())
     last = (hist.sort_values('season').groupby('rec_id')
             .agg(prev_team=('team', 'last'), prev_season=('season', 'max'),
                  z_value=('z_value', 'last'), targets=('targets', 'last'),
@@ -333,6 +360,9 @@ def project_players(prod, roster, recruits, season, model):
                  z_reception_share=('z_reception_share', 'last'),
                  z_yard_share=('z_yard_share', 'last'),
                  z_adj_epa_per_catch=('z_adj_epa_per_catch', 'last'),
+                 prior_max=('prior_max', 'last'),
+                 has_prior=('has_prior', 'last'),
+                 car_n=('car_n', 'last'),
                  prev_exp=('exp', 'last')).reset_index())
     r = roster[(roster['season'] == season)
                & (roster['position'].isin(['WR', 'TE']))].copy()
@@ -471,7 +501,9 @@ def main():
              'zt': 'value:log(receptions)', 'exp': 'exp',
              'z_reception_share': 'reception_share',
              'z_yard_share': 'yard_share',
-             'z_adj_epa_per_catch': 'adj_epa_per_catch'}
+             'z_adj_epa_per_catch': 'adj_epa_per_catch',
+             'prior_max': 'best_prior_season', 'has_prior': 'has_prior',
+             'car_n': 'seasons_played'}
     terms = ' '.join(f"{c:+.3f}*{LABEL.get(f, f)}"
                      for f, c in zip(FEATURES, model.coef_))
     print(f"  next = {model.intercept_:+.3f} {terms}")
@@ -602,7 +634,7 @@ def main():
                 'basis', 'prev_team', 'prev_season', 'prev_yards',
                 'receptions', 'targets',
                 'exp', 'z_value', 'z_reception_share', 'z_yard_share',
-                'z_adj_epa_per_catch',
+                'z_adj_epa_per_catch', 'prior_max', 'has_prior', 'car_n',
                 'stars', 'rating', 'p_play', 'if_plays',
                 'projected', 'moved']
         PL = PL[[c for c in keep if c in PL.columns]]
