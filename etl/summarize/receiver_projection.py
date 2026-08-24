@@ -332,16 +332,34 @@ def project_freshmen(roster, recruits, season, rating_mu, rating_sd,
 def trim_to_room(df, value_col, pos_col='position'):
     """Keep only the depth chart: the best few receivers and tight ends.
 
-    Ranked on projected value, so the room is who a team expects to throw to,
-    not who happens to be listed.
+    A man with a record outranks a man without one, and only then does
+    projected value decide. Sorting on value alone answered the wrong question.
+
+    The projection is an expected value and it correctly discounts an unproven
+    recruit by his small chance of playing at all - so a five-star at +0.10 can
+    sit above a returner at -0.19 and be properly priced. But a depth chart is
+    not a list of expected values, it is a list of who will be on the field.
+    Measured over the 706 cases where a recruit was projected above a returner
+    on the same team:
+
+        reached a qualifying season      recruit 14%     returner 58%
+        mean z, a non-season counted 0   recruit -0.02   returner -0.06
+
+    The recruit is the marginally better bet on value and a quarter as likely
+    to appear. Ohio State's room put two recruits above Brandon Inniss, who was
+    third on the team in catches and returns to a room that lost Carnell Tate.
     """
     d = df[df[pos_col].isin(ROOM_POSITIONS)].copy()
     if d.empty:
         return d
-    d['_rk'] = (d.groupby(['team', pos_col])[value_col]
-                .rank(ascending=False, method='first'))
+    tier = np.where(d['basis'].eq('record'), 0, 1) if 'basis' in d.columns \
+        else np.zeros(len(d))
+    d['_tier'] = tier
+    order = d.sort_values(['_tier', value_col], ascending=[True, False])
+    d['_rk'] = order.groupby(['team', pos_col]).cumcount().add(1).reindex(
+        d.index)
     limit = d[pos_col].map({'WR': ROOM_WR, 'TE': ROOM_TE})
-    return d[d['_rk'] <= limit].drop(columns=['_rk'])
+    return d[d['_rk'] <= limit].drop(columns=['_rk', '_tier'])
 
 
 def project_players(prod, roster, recruits, season, model):
