@@ -141,11 +141,17 @@ def main():
 
     roster['rid'] = roster['recruitIds'].map(first_recruit_id)
     link = roster.dropna(subset=['rid']).drop_duplicates('pid')[['pid', 'rid']]
+    # the signing year comes across with the grade, so a page can say what
+    # class a back is in. It carries no weight in the fit - it is shown, the
+    # way stars are, and the model reads log(carries) for workload instead.
     prod = prod.merge(link, on='pid', how='left').merge(
-        recruits[['id', 'rating']].rename(columns={'id': 'rid'}),
+        recruits[['id', 'rating', 'year']].rename(
+            columns={'id': 'rid', 'year': 'class_year'}),
         on='rid', how='left')
     mu, sd = recruits['rating'].mean(), recruits['rating'].std()
     prod['rating_z'] = (prod['rating'] - mu) / sd
+    prod['exp'] = prod['season'] - pd.to_numeric(prod['class_year'],
+                                                 errors='coerce')
 
     prod = prod.sort_values(['pid', 'season'])
     prod['next'] = prod.groupby('pid')['z_value'].shift(-1)
@@ -156,6 +162,7 @@ def main():
 
     print("does the recruiting grade add anything for a back with a record?")
     tr, te = P[P['season'] <= 2022], P[P['season'] > 2022]
+    skill_both = float('nan')
     for lab, cols in (('production only', ['z_value', 'lc', 'zc']),
                       ('recruiting only', ['rating_z']),
                       ('both', ['z_value', 'lc', 'zc', 'rating_z'])):
@@ -167,6 +174,8 @@ def main():
         r = np.corrcoef(m.predict(b[cols]), b['next'])[0, 1]
         extra = f"   rating weight {m.coef_[-1]:+.3f}" if lab == 'both' else ''
         print(f"  {lab:<20}holdout r = {r:+.3f}{extra}")
+        if lab == 'both':
+            skill_both = float(r)
 
     # The recruiting grade earns a place here, unlike at receiver: it lifts the
     # holdout from +0.436 to +0.472 even for backs who already have a record.
@@ -184,6 +193,26 @@ def main():
           f"{model_prod.coef_[0]:+.3f}*value {model_prod.coef_[1]:+.3f}"
           f"*log(carries) {model_prod.coef_[2]:+.3f}*interaction")
 
+    # The fitted equation, written beside the results, so a page that shows it
+    # renders from this rather than from figures typed into a template. Every
+    # coefficient this project ever hard-coded into prose went stale.
+    import json as _json
+    LABEL = {'z_value': 'value', 'lc': 'log(carries)',
+             'zc': 'value:log(carries)', 'rating_z': 'recruiting_grade'}
+    mpath = os.path.join(os.path.dirname(args.out), 'rb_projection_model.json')
+    with open(mpath, 'w') as fh:
+        _json.dump({
+            'with_grade': {
+                'intercept': float(model.intercept_),
+                'terms': [{'feature': f, 'label': LABEL[f], 'coef': float(c)}
+                          for f, c in zip(X, model.coef_)]},
+            'without_grade': {
+                'intercept': float(model_prod.intercept_),
+                'terms': [{'feature': f, 'label': LABEL[f], 'coef': float(c)}
+                          for f, c in zip(Xp, model_prod.coef_)]},
+            'holdout_r': float(skill_both), 'pairs': int(len(P))}, fh, indent=1)
+    print(f"  wrote {mpath}")
+
     print("\nhow often does a recruited back ever play?")
     play_rate = measure_play_rate(prod, recruits)
     first = prod.sort_values('season').drop_duplicates('pid').dropna(
@@ -199,9 +228,17 @@ def main():
         hist = prod[prod['season'] < season]
         if hist.empty:
             continue
+        # receptions and the season it all comes from are carried alongside
+        # the carries, so a page can show which year a back is being read on
+        # and how much of his value came out of the backfield rather than
+        # re-deriving either from the production file
         last = (hist.sort_values('season').groupby('pid')
                 .agg(prev_team=('team', 'last'), z_value=('z_value', 'last'),
                      carries=('carries', 'last'),
+                     receptions=('receptions', 'last'),
+                     prev_season=('season', 'max'),
+                     rating_z=('rating_z', 'last'),
+                     prev_exp=('exp', 'last'),
                      prev_yards=('rush_yards', 'last')).reset_index())
         r = roster[(roster['season'] == season)
                    & (roster['position'].isin(ROOM_POSITIONS))].copy()
@@ -213,6 +250,9 @@ def main():
         r = r.merge(last, on='pid', how='left')
         r['who'] = r['firstName'].astype(str) + ' ' + r['lastName'].astype(str)
         r['rating_z'] = (r['rating'] - mu) / sd
+        # a year older than his last recorded season, not than his last roster
+        # appearance - a back who missed a year should not age twice for it
+        r['exp'] = r['prev_exp'] + (season - r['prev_season'])
 
         has = r['z_value'].notna() & r['carries'].notna()
         r['projected'] = np.nan
@@ -271,7 +311,8 @@ def main():
 
     PL = pd.concat(players, ignore_index=True)
     keep = ['season', 'team', 'pid', 'firstName', 'lastName', 'position',
-            'basis', 'prev_team', 'prev_yards', 'carries', 'z_value',
+            'basis', 'prev_team', 'prev_season', 'prev_yards', 'carries',
+            'receptions', 'z_value', 'rating_z', 'exp',
             'stars', 'rating', 'p_play', 'if_plays', 'projected', 'moved']
     PL = PL[[c for c in keep if c in PL.columns]].sort_values(
         ['season', 'projected'], ascending=[True, False])
