@@ -267,12 +267,18 @@ def fit_freshman(prod, roster, recruits, rating_mu, rating_sd):
     rc = rc[rc['class_year'].between(FIRST_FINISHED_CLASS,
                                      LAST_FINISHED_CLASS)]
     if rc.empty or 'pid' not in rc.columns:
-        return None, None, np.nan
+        return None, None, {}, np.nan
 
     # the season each man first qualified, and how good it was
     first = (prod.sort_values('season').groupby('rec_id')
              .agg(first_season=('season', 'first'),
-                  first_z=('z_value', 'first')).reset_index())
+                  first_z=('z_value', 'first'),
+                  # the line he posted in that first season, so the same fit
+                  # can produce a readable projection and not only a rating
+                  receptions=('receptions', 'first'),
+                  adj_yards_per_catch=('adj_yards_per_catch', 'first'),
+                  adj_epa_per_catch=('adj_epa_per_catch', 'first'))
+             .reset_index())
     rc = rc.merge(first, left_on='pid', right_on='rec_id', how='left')
 
     # One row per season a man is on a roster with no qualifying season yet -
@@ -283,7 +289,9 @@ def fit_freshman(prod, roster, recruits, rating_mu, rating_sd):
     ros = roster[roster['position'].isin(ROOM_POSITIONS)].copy()
     ros = ros.dropna(subset=['rid'])[['rid', 'season', 'position']]
     panel = ros.merge(rc[['rid', 'rating', 'stars', 'class_year',
-                          'first_season', 'first_z']], on='rid', how='inner')
+                          'first_season', 'first_z', 'receptions',
+                          'adj_yards_per_catch', 'adj_epa_per_catch']],
+                      on='rid', how='inner')
     panel['age'] = panel['season'] - panel['class_year']
     panel = panel[panel['age'].between(0, 4)]
     at_risk = panel[panel['first_season'].isna()
@@ -316,6 +324,22 @@ def fit_freshman(prod, roster, recruits, rating_mu, rating_sd):
         val_model = LinearRegression().fit(q[XP].to_numpy(float),
                                            q['first_z'].to_numpy())
 
+    # The stat line a man posts IF he breaks through, on the same features.
+    # Conditional by construction: multiplying by a 12% chance of playing would
+    # print four catches, which is a number nobody posts - the first qualifying
+    # season is 25-odd catches or it does not happen.
+    #
+    # The grade is a weak instrument here: r = +0.15 on receptions against
+    # +0.50 for a returning man's own record. So these land close to the band
+    # median and should be read as "what a recruit of this grade posts when he
+    # breaks through", not as a forecast of the individual.
+    line_models = {}
+    for src, name in LINE.items():
+        q2 = q.dropna(subset=XP + [src]) if src in q.columns else q.iloc[:0]
+        if len(q2) > 200:
+            line_models[name] = LinearRegression().fit(
+                q2[XP].to_numpy(float), q2[src].to_numpy())
+
     print(f"no-record model: {len(fit):,} rostered seasons at risk, "
           f"{int(fit['qualifies'].sum()):,} qualified "
           f"(classes {FIRST_FINISHED_CLASS}-{LAST_FINISHED_CLASS})")
@@ -335,7 +359,7 @@ def fit_freshman(prod, roster, recruits, rating_mu, rating_sd):
                   + (f"   (raw {raw['qualifies'].mean():.0%})" if len(raw)
                      else ''))
         print(f"  value model holdout r = {skill:+.3f}")
-    return play_model, val_model, skill
+    return play_model, val_model, line_models, skill
 
 
 def project_freshmen(roster, recruits, season, rating_mu, rating_sd,
@@ -353,7 +377,8 @@ def project_freshmen(roster, recruits, season, rating_mu, rating_sd,
     Without it the module-level fallbacks are used, which is only correct if
     neither the qualification gate nor the value definition has moved.
     """
-    play_model, val_model = (fresh if fresh is not None else (None, None))
+    play_model, val_model, line_models = (
+        fresh if fresh is not None else (None, None, {}))
     r = roster[(roster['season'] == season)
                & (roster['position'].isin(ROOM_POSITIONS))].copy()
     r = r.merge(recruits[['id', 'rating', 'stars', 'year']].rename(
@@ -378,6 +403,13 @@ def project_freshmen(roster, recruits, season, rating_mu, rating_sd,
         r.loc[r['position'] == 'TE', 'p_play'] *= TE_PLAY_FACTOR
         r['if_plays'] = FRESH_A + FRESH_B * rz
     r['projected'] = r['p_play'] * r['if_plays']
+    # the line he posts IF he breaks through - not multiplied by p_play, since
+    # 12% of a season is a number nobody posts. Flagged so a page can say so.
+    for name, m in (line_models or {}).items():
+        r[name] = m.predict(X)
+    if 'proj_receptions' in r.columns:
+        r['proj_receptions'] = r['proj_receptions'].clip(lower=0)
+    r['line_if_plays'] = bool(line_models)
     return r
 
 
@@ -590,9 +622,9 @@ def main():
     else:
         rating_sd = float(prod['rating'].std())
 
-    _pm, _vm, _fskill = fit_freshman(prod, roster, finished,
-                                     rating_mu, rating_sd)
-    FRESH = (_pm, _vm)
+    _pm, _vm, _lm, _fskill = fit_freshman(prod, roster, finished,
+                                          rating_mu, rating_sd)
+    FRESH = (_pm, _vm, _lm)
 
     model, skill, n = fit_projection(prod)
     LINE_MODELS = fit_line(add_career(prod.sort_values(['rec_id', 'season'])))
@@ -739,7 +771,7 @@ def main():
                 'receptions', 'targets',
                 'exp', 'z_value', 'z_reception_share', 'z_yard_share',
                 'z_adj_epa_per_catch', 'prior_max', 'has_prior', 'car_n',
-                'proj_receptions', 'proj_ypc', 'proj_epc',
+                'proj_receptions', 'proj_ypc', 'proj_epc', 'line_if_plays',
                 'stars', 'rating', 'p_play', 'if_plays',
                 'projected', 'moved']
         PL = PL[[c for c in keep if c in PL.columns]]
